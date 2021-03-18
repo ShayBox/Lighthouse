@@ -1,0 +1,20 @@
+[package]
+name = "lighthouse"
+version = "0.1.0"
+authors = ["Shayne Hartford <shaybox@shaybox.com>"]
+edition = "2018"
+description = "VR Lighthouse power state management in Rust"
+readme = "README.md"
+homepage = "https://github.com/ShayBox/Lighthouse"
+repository = "https://github.com/ShayBox/Lighthouse"
+license-file = "LICENSE"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+
+[dependencies]
+uuid = "0.8.2"
+serde = "1.0.124"
+btleplug = { version = "0.7.1", features = ["serde"] }
