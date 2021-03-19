@@ -38,22 +38,31 @@ pub fn main() {
 
     if args.len() > 2 {
         let lighthouses_v1 = central.peripherals().into_iter().filter(|p| {
-            p.properties()
-                .local_name
-                .iter()
-                .any(|name| name.contains("HTC BS"))
+            p.properties().local_name.iter().any(|name| {
+                name.starts_with("HTC BS")
+                    && name[(name.len() - 4)..4] == args[2][(args[2].len() - 4)..4]
+            })
         });
 
         for lighthouse in lighthouses_v1 {
-            // TODO: Slice lighthouse mac and use args[2]
+            let name = match lighthouse.properties().local_name {
+                Some(s) => s,
+                None => exit(1),
+            };
+
+            let dd = name[(name.len() - 2)..4].parse().unwrap();
+            let cc = name[(name.len() - 4)..2].parse().unwrap();
+            let bb = args[2][2..4].parse().unwrap();
+            let aa = args[2][0..2].parse().unwrap();
+
             if args[1] == "off" {
                 cmd = vec![
-                    0x12, 0x02, 0x00, 0x01, 0xDD, 0xCC, 0xBB, 0xAA, 0x00, 0x00, 0x00, 0x00, 0x00,
-                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                    0x12, 0x02, 0x00, 0x01, dd, cc, bb, aa, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                 ];
             } else if args[1] == "on" {
                 cmd = vec![
-                    0x12, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00,
+                    0x12, 0x00, 0x00, 0x00, dd, cc, bb, aa, 0x00, 0x00, 0x00, 0x00, 0x00,
                     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                 ];
             } else {
