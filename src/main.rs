@@ -40,20 +40,15 @@ pub fn main() {
         let lighthouses_v1 = central.peripherals().into_iter().filter(|p| {
             p.properties().local_name.iter().any(|name| {
                 name.starts_with("HTC BS")
-                    && name[(name.len() - 4)..4] == args[2][(args[2].len() - 4)..4]
+                    && name[(name.len() - 4)..] == args[2][(args[2].len() - 4)..]
             })
         });
 
         for lighthouse in lighthouses_v1 {
-            let name = match lighthouse.properties().local_name {
-                Some(s) => s,
-                None => exit(1),
-            };
-
-            let dd = name[(name.len() - 2)..4].parse().unwrap();
-            let cc = name[(name.len() - 4)..2].parse().unwrap();
-            let bb = args[2][2..4].parse().unwrap();
-            let aa = args[2][0..2].parse().unwrap();
+            let dd = u8::from_str_radix(&args[2][6..8], 16).unwrap();
+            let cc = u8::from_str_radix(&args[2][4..6], 16).unwrap();
+            let bb = u8::from_str_radix(&args[2][2..4], 16).unwrap();
+            let aa = u8::from_str_radix(&args[2][0..2], 16).unwrap();
 
             if args[1] == "off" {
                 cmd = vec![
@@ -62,8 +57,8 @@ pub fn main() {
                 ];
             } else if args[1] == "on" {
                 cmd = vec![
-                    0x12, 0x00, 0x00, 0x00, dd, cc, bb, aa, 0x00, 0x00, 0x00, 0x00, 0x00,
-                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                    0x12, 0x00, 0x00, 0x00, dd, cc, bb, aa, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                 ];
             } else {
                 println!("V1: Valid states: on, off");
