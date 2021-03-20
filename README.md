@@ -1,14 +1,15 @@
 # Lighthouse
 VR Lighthouse power state management in Rust
 
-This has been tested on SteamVR V2 lighthouses (Valve Index)  
-There is no support for SteamVR V1 lighthouses (Vive)  
-Pull requests welcome, I don't have any V1 lighthouses to test
-
 Windows and Linux binaries available [here](https://github.com/ShayBox/Lighthouse/releases/latest)
 
 ## Usage
 
-`lighthouse off`
+SteamVR v1:  
+`lighthouse [on|off] [BSID]`  
+`lighthouse on XXXXXXXX`  
+BSID is found on the lighthouse and is 8 characters long
+
+SteamVR v2:  
+`lighthouse [on|off|standby]`  
 `lighthouse on`
-`lighthouse standby`

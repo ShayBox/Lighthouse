@@ -24,8 +24,8 @@ pub fn main() {
     } else {
         println!("Lighthouse - VR Lighthouse power state management in Rust");
         println!("");
-        println!("lighthouse [on | off] [v1 ID]");
-        println!("lighthouse [on | off | standby]");
+        println!("V1: lighthouse [on|off] [BSID]");
+        println!("V2: lighthouse [on|off|standby]");
         exit(128);
     }
 

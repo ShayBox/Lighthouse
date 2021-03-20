@@ -598,7 +598,7 @@ dependencies = [
 
 [[package]]
 name = "lighthouse"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "btleplug",
  "serde",
