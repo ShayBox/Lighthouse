@@ -45,10 +45,10 @@ pub fn main() {
         });
 
         for lighthouse in lighthouses_v1 {
-            let dd = u8::from_str_radix(&args[2][6..8], 16).unwrap();
-            let cc = u8::from_str_radix(&args[2][4..6], 16).unwrap();
-            let bb = u8::from_str_radix(&args[2][2..4], 16).unwrap();
             let aa = u8::from_str_radix(&args[2][0..2], 16).unwrap();
+            let bb = u8::from_str_radix(&args[2][2..4], 16).unwrap();
+            let cc = u8::from_str_radix(&args[2][4..6], 16).unwrap();
+            let dd = u8::from_str_radix(&args[2][6..8], 16).unwrap();
 
             if args[1] == "off" {
                 cmd = vec![
@@ -93,12 +93,11 @@ pub fn write_lighthouse(central: &Adapter, address: BDAddr, cmd: &[u8], c_uuid: 
         Ok(_) => {}
         Err(_) => lighthouse.disconnect().unwrap(),
     };
-    match lighthouse.discover_characteristics() {
-        Ok(_) => {}
-        Err(_) => lighthouse.disconnect().unwrap(),
-    };
 
-    let chars = lighthouse.characteristics();
+    let chars = lighthouse.discover_characteristics().unwrap_or_else(|_| {
+        lighthouse.disconnect().unwrap();
+        exit(1)
+    });
     let char = chars.iter().find(|c| c.uuid == c_uuid).unwrap_or_else(|| {
         lighthouse.disconnect().unwrap();
         exit(1)
