@@ -4,24 +4,58 @@ on:
 
 jobs:
   release:
-    name: release ${{ matrix.target }}
-    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
     strategy:
       fail-fast: false
       matrix:
         include:
-          - target: x86_64-apple-darwin
-            archive: zip
-          - target: x86_64-pc-windows-gnu
-            archive: zip
-          - target: x86_64-unknown-linux-musl
-            archive: tar.gz
+          - name: Linux-x86_64
+            target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+
+          - name: macOS-Apple
+            target: aarch64-apple-darwin
+            runner: macos-latest
+
+          - name: macOS-Intel
+            target: x86_64-apple-darwin
+            runner: macos-latest
+
+          - name: Windows
+            target: i686-pc-windows-msvc
+            runner: windows-latest
+
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v3
-      - name: Compile and release
-        uses: rust-build/rust-build.action@v1.3.2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          RUSTTARGET: ${{ matrix.target }}
-          ARCHIVE_TYPES: ${{ matrix.archive }}
+      - name: Fetch Repository
+        uses: actions/checkout@v3
+
+      - name: Update and Install Dependencies (Linux)
+        if: ${{ matrix.runner == 'ubuntu-latest' }}
+        run: |
+          sudo apt update
+          sudo apt upgrade -y
+          sudo apt install -y libdbus-1-dev
+
+      - name: Update Rust Toolchain
+        run: rustup update stable
+
+      - name: Add Rust Target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build Release Binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Create Zip Archive (Windows)
+        if: ${{ matrix.runner == 'windows-latest' }}
+        run: bash -c '7z a ${{ matrix.name }}.zip ./target/${{ matrix.target }}/release/lighthouse.exe'
+
+      - name: Create Zip Archive (Other)
+        if: ${{ matrix.runner != 'windows-latest' }}
+        run: zip -j ${{ matrix.name }}.zip target/${{ matrix.target }}/release/lighthouse
+
+      - name: Upload Zip Archive
+        run: gh release upload ${{ github.ref_name }} ${{ matrix.name }}.zip --clobber

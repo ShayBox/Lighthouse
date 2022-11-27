@@ -8,7 +8,7 @@
 </div>
 
 # Lighthouse
-VR Lighthouse power state management in Rust
+Virtual reality basestation power management in Rust
 
 ## Usage
 
@@ -22,7 +22,7 @@ Options:
   -q, --quiet...       Less output per occurrence
   -h, --help           Print help information
 ```
-V1 Lighthouse Basestations require an 8 character BSID found on the device.
+V1 Basestations require an 8 character BSID found on the device.
 
 ## Example
 V1: `$ lighthouse -s on -b aabbccdd`  

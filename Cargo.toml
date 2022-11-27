@@ -1,6 +1,6 @@
 [package]
 name = "lighthouse"
-description = "VR Lighthouse power state management in Rust"
+description = "Virtual reality basestation power management in Rust"
 version = "1.0.0"
 authors = ["Shayne Hartford <shaybox@shaybox.com>"]
 edition = "2021"
