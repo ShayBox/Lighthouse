@@ -10,15 +10,23 @@
 # Lighthouse
 VR Lighthouse power state management in Rust
 
-Windows and Linux binaries available [here](https://github.com/ShayBox/Lighthouse/releases/latest)
-
 ## Usage
 
-SteamVR v1:  
-`lighthouse [on|off] [BSID]`  
-`lighthouse on XXXXXXXX`  
-BSID is found on the lighthouse and is 8 characters long
+```
+Usage: lighthouse [OPTIONS] --state <STATE>
 
-SteamVR v2:  
-`lighthouse [on|off|standby]`  
-`lighthouse on`
+Options:
+  -s, --state <STATE>  V1: [OFF|ON] [BSID] | V2: [OFF|ON|STANDBY]
+  -b, --bsid <BSID>    V1: Basestation BSID
+  -v, --verbose...     More output per occurrence
+  -q, --quiet...       Less output per occurrence
+  -h, --help           Print help information
+```
+V1 Lighthouse Basestations require an 8 character BSID found on the device.
+
+## Example
+V1: `$ lighthouse -s on -b aabbccdd`  
+V2: `$ lighthouse -s on`
+
+## macOS
+Enable the Bluetooth permission for your terminal. You can do the latter by going to System Preferences → Security & Privacy → Privacy → Bluetooth, clicking the '+' button, and selecting 'Terminal' (or iTerm or whichever terminal application you use).

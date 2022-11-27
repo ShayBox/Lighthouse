@@ -1,114 +1,157 @@
-use btleplug::api::{BDAddr, Central, Peripheral, WriteType};
-#[cfg(target_os = "linux")]
-use btleplug::bluez::{adapter::Adapter, manager::Manager};
-#[cfg(target_os = "windows")]
-use btleplug::winrtble::{adapter::Adapter, manager::Manager};
-use std::{env, process::exit, thread, time::Duration, vec::Vec};
+use btleplug::api::{Central, Manager as _, Peripheral, ScanFilter};
+use btleplug::platform::Manager;
+use clap::Parser;
+use clap_verbosity_flag::Verbosity;
+use error_stack::{bail, ensure, IntoReport, Result, ResultExt};
+use lighthouse::Error;
+use std::time::Duration;
+use tokio::time;
 use uuid::Uuid;
 
-pub fn main() {
-    let args: Vec<String> = env::args().collect();
+#[macro_use]
+extern crate log;
 
-    let mut cmd;
-    if args.len() > 1 {
-        if args[1] == "off" {
-            cmd = vec![0x00];
-        } else if args[1] == "on" {
-            cmd = vec![0x01];
-        } else if args[1] == "standby" {
-            cmd = vec![0x02];
-        } else {
-            println!("V2: Valid states: on, off, standby");
-            exit(128);
-        }
-    } else {
-        println!("Lighthouse - VR Lighthouse power state management in Rust");
-        println!("");
-        println!("V1: lighthouse [on|off] [BSID]");
-        println!("V2: lighthouse [on|off|standby]");
-        exit(128);
-    }
+#[derive(Debug, Parser)]
+struct Args {
+    /// V1: [OFF|ON] [BSID] | V2: [OFF|ON|STANDBY]
+    #[arg(short, long)]
+    state: String,
 
-    let manager = Manager::new().unwrap();
-    let adapters = manager.adapters().unwrap();
-    let central = adapters.into_iter().nth(0).unwrap();
+    /// V1: Basestation BSID
+    #[arg(short, long)]
+    bsid: Option<String>,
 
-    central.start_scan().unwrap();
-    thread::sleep(Duration::from_secs(5));
-
-    if args.len() > 2 {
-        let lighthouses_v1 = central.peripherals().into_iter().filter(|p| {
-            p.properties().local_name.iter().any(|name| {
-                name.starts_with("HTC BS")
-                    && name[(name.len() - 4)..] == args[2][(args[2].len() - 4)..]
-            })
-        });
-
-        for lighthouse in lighthouses_v1 {
-            let aa = u8::from_str_radix(&args[2][0..2], 16).unwrap();
-            let bb = u8::from_str_radix(&args[2][2..4], 16).unwrap();
-            let cc = u8::from_str_radix(&args[2][4..6], 16).unwrap();
-            let dd = u8::from_str_radix(&args[2][6..8], 16).unwrap();
-
-            if args[1] == "off" {
-                cmd = vec![
-                    0x12, 0x02, 0x00, 0x01, dd, cc, bb, aa, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                ];
-            } else if args[1] == "on" {
-                cmd = vec![
-                    0x12, 0x00, 0x00, 0x00, dd, cc, bb, aa, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                ];
-            } else {
-                println!("V1: Valid states: on, off");
-                exit(128);
-            }
-
-            let c_uuid = Uuid::parse_str("0000cb01-0000-1000-8000-00805f9b34fb").unwrap();
-            write_lighthouse(&central, lighthouse.address(), &cmd, c_uuid)
-        }
-    } else {
-        let lighthouses_v2 = central.peripherals().into_iter().filter(|p| {
-            p.properties()
-                .local_name
-                .iter()
-                .any(|name| name.contains("LHB-"))
-        });
-
-        for lighthouse in lighthouses_v2 {
-            let c_uuid = Uuid::parse_str("00001525-1212-efde-1523-785feabcd124").unwrap();
-            write_lighthouse(&central, lighthouse.address(), &cmd, c_uuid)
-        }
-    }
+    #[clap(flatten)]
+    verbose: Verbosity,
 }
 
-pub fn write_lighthouse(central: &Adapter, address: BDAddr, cmd: &[u8], c_uuid: Uuid) {
-    let lighthouse = match central.peripheral(address) {
-        Some(x) => x,
-        None => exit(1),
-    };
+#[tokio::main]
+async fn main() -> Result<(), Error> {
+    let args = Args::parse();
 
-    match lighthouse.connect() {
-        Ok(_) => {}
-        Err(_) => lighthouse.disconnect().unwrap(),
-    };
+    tracing_subscriber::fmt()
+        .with_max_level(args.verbose.tracing_level_filter())
+        .init();
+    info!("Initialized logger");
 
-    let chars = lighthouse.discover_characteristics().unwrap_or_else(|_| {
-        lighthouse.disconnect().unwrap();
-        exit(1)
-    });
-    let char = chars.iter().find(|c| c.uuid == c_uuid).unwrap_or_else(|| {
-        lighthouse.disconnect().unwrap();
-        exit(1)
-    });
+    let manager = Manager::new()
+        .await
+        .into_report()
+        .change_context(Error::Btle)?;
 
-    match lighthouse.write(&char, &cmd, WriteType::WithoutResponse) {
-        Ok(_) => {}
-        Err(_) => lighthouse.disconnect().unwrap(),
-    };
+    let adapters = manager
+        .adapters()
+        .await
+        .into_report()
+        .change_context(Error::Btle)?;
 
-    thread::sleep(Duration::from_millis(200));
+    ensure!(
+        !adapters.is_empty(),
+        Error::Message("No Bluetooth adapters found")
+    );
 
-    lighthouse.disconnect().unwrap();
+    for adapter in adapters.iter() {
+        let info = adapter
+            .adapter_info()
+            .await
+            .into_report()
+            .change_context(Error::Btle)?;
+        info!("Starting scan on {info}...");
+
+        adapter
+            .start_scan(ScanFilter::default())
+            .await
+            .into_report()
+            .change_context(Error::Btle)
+            .attach_printable("Can't scan BLE adapter for connected devices...")?;
+        time::sleep(Duration::from_secs(10)).await;
+
+        let peripherals = adapter
+            .peripherals()
+            .await
+            .into_report()
+            .change_context(Error::Btle)?;
+
+        ensure!(
+            !peripherals.is_empty(),
+            Error::Message("->>> BLE peripheral devices were not found. Exiting...")
+        );
+
+        for peripheral in peripherals.iter() {
+            let Some(properties) = peripheral
+                .properties()
+                .await
+                .into_report()
+                .change_context(Error::Btle)?
+            else {
+                continue;
+            };
+
+            let Some(name) = properties.local_name else {
+                continue;
+            };
+
+            let state = args.state.to_uppercase();
+            if let Some(bsid) = &args.bsid {
+                if !name.starts_with("HTC BS")
+                    || name[(name.len() - 4)..] != bsid[(bsid.len() - 4)..]
+                {
+                    continue;
+                }
+
+                let aa = u8::from_str_radix(&bsid[0..2], 16)
+                    .into_report()
+                    .change_context(Error::Std)?;
+                let bb = u8::from_str_radix(&bsid[2..4], 16)
+                    .into_report()
+                    .change_context(Error::Std)?;
+                let cc = u8::from_str_radix(&bsid[4..6], 16)
+                    .into_report()
+                    .change_context(Error::Std)?;
+                let dd = u8::from_str_radix(&bsid[6..8], 16)
+                    .into_report()
+                    .change_context(Error::Std)?;
+
+                let cmd = match state.as_str() {
+                    "OFF" => vec![
+                        0x12, 0x02, 0x00, 0x01, dd, cc, bb, aa, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                        0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                    ],
+                    "ON" => vec![
+                        0x12, 0x00, 0x00, 0x00, dd, cc, bb, aa, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                        0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                    ],
+                    _ => bail!(Error::Message(
+                        "V1: Unknown State {state}, Available: [OFF|ON]"
+                    )),
+                };
+
+                let uuid = Uuid::parse_str("0000cb01-0000-1000-8000-00805f9b34fb")
+                    .into_report()
+                    .change_context(Error::Uuid)?;
+
+                lighthouse::write(adapter, peripheral.id(), &cmd, uuid).await?;
+            } else {
+                if !name.starts_with("LHB-") {
+                    continue;
+                }
+
+                let cmd = match state.as_str() {
+                    "OFF" => vec![0x00],
+                    "ON" => vec![0x01],
+                    "STANDBY" => vec![0x02],
+                    _ => bail!(Error::Message(
+                        "V2: Unknown State {state}, Available: [OFF|ON|STANDBY]"
+                    )),
+                };
+
+                let uuid = Uuid::parse_str("00001525-1212-efde-1523-785feabcd124")
+                    .into_report()
+                    .change_context(Error::Uuid)?;
+
+                lighthouse::write(adapter, peripheral.id(), &cmd, uuid).await?;
+            };
+        }
+    }
+    Ok(())
 }

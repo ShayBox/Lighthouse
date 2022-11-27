@@ -1,20 +1,29 @@
 [package]
 name = "lighthouse"
-version = "0.2.0"
-authors = ["Shayne Hartford <shaybox@shaybox.com>"]
-edition = "2018"
 description = "VR Lighthouse power state management in Rust"
+version = "1.0.0"
+authors = ["Shayne Hartford <shaybox@shaybox.com>"]
+edition = "2021"
 readme = "README.md"
-homepage = "https://github.com/ShayBox/Lighthouse"
 repository = "https://github.com/ShayBox/Lighthouse"
-license-file = "LICENSE"
+license = "MIT"
 
-[profile.release]
-opt-level = "s"
-lto = true
-codegen-units = 1
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-uuid = "0.8.2"
+uuid = "1.2.2"
 serde = "1.0.124"
-btleplug = { version = "0.7.1", features = ["serde"] }
+btleplug = { version = "0.10.3", features = ["serde"] }
+tokio = { version = "1.22.0", features = ["full"] }
+log = "0.4.17"
+tracing-subscriber = "0.3.16"
+error-stack = "0.2.4"
+clap-verbosity-flag = { git = "https://github.com/ShayBoxs-Forks/clap-verbosity-flag.git", version = "2.0.0" }
+clap = "4.0.27"
+
+[profile.release]
+strip = true
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
