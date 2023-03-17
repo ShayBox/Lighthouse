@@ -1,7 +1,10 @@
-use btleplug::api::{Central, Peripheral, WriteType};
-use btleplug::platform::{Adapter, PeripheralId};
-use error_stack::{Context, IntoReport, Result, ResultExt};
 use std::{fmt, time::Duration};
+
+use btleplug::{
+    api::{Central, Peripheral, WriteType},
+    platform::{Adapter, PeripheralId},
+};
+use error_stack::{Context, IntoReport, Result, ResultExt};
 use tokio::time;
 use uuid::Uuid;
 
@@ -14,6 +17,7 @@ pub enum Error {
 }
 
 impl Context for Error {}
+
 impl fmt::Display for Error {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self {

@@ -1,15 +1,16 @@
-use btleplug::api::{Central, Manager as _, Peripheral, ScanFilter};
-use btleplug::platform::Manager;
+use std::time::Duration;
+
+use btleplug::{
+    api::{Central, Manager as _, Peripheral, ScanFilter},
+    platform::Manager,
+};
 use clap::Parser;
-use clap_verbosity_flag::Verbosity;
+use clap_verbosity_flag::tracing::Verbosity;
 use error_stack::{bail, ensure, IntoReport, Result, ResultExt};
 use lighthouse::Error;
-use std::time::Duration;
 use tokio::time;
+use tracing::info;
 use uuid::Uuid;
-
-#[macro_use]
-extern crate log;
 
 #[derive(Debug, Parser)]
 struct Args {
@@ -32,7 +33,6 @@ async fn main() -> Result<(), Error> {
     tracing_subscriber::fmt()
         .with_max_level(args.verbose.tracing_level_filter())
         .init();
-    info!("Initialized logger");
 
     let manager = Manager::new()
         .await
@@ -83,9 +83,9 @@ async fn main() -> Result<(), Error> {
                 .await
                 .into_report()
                 .change_context(Error::Btle)?
-            else {
-                continue;
-            };
+                else {
+                    continue;
+                };
 
             let Some(name) = properties.local_name else {
                 continue;
