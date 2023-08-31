@@ -1,32 +1,23 @@
-use std::{fmt, time::Duration};
+use std::time::Duration;
 
 use btleplug::{
     api::{Central, Peripheral, WriteType},
     platform::{Adapter, PeripheralId},
 };
-use error_stack::{Context, IntoReport, Result, ResultExt};
+use thiserror::Error;
 use tokio::time;
 use uuid::Uuid;
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum Error {
-    Btle,
-    Std,
-    Uuid,
+    #[error("BtleError")]
+    Btle(#[from] btleplug::Error),
+    #[error("StdError")]
+    Std(#[from] std::num::ParseIntError),
+    #[error("UuidError")]
+    Uuid(#[from] uuid::Error),
+    #[error("{0}")]
     Message(&'static str),
-}
-
-impl Context for Error {}
-
-impl fmt::Display for Error {
-    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self {
-            Error::Btle => fmt.write_str("BtleError"),
-            Error::Std => fmt.write_str("StdError"),
-            Error::Uuid => fmt.write_str("UuidError"),
-            Error::Message(data) => fmt.write_str(data),
-        }
-    }
 }
 
 pub async fn write(
@@ -35,23 +26,13 @@ pub async fn write(
     data: &[u8],
     uuid: Uuid,
 ) -> Result<(), Error> {
-    let peripheral = adapter
-        .peripheral(&id)
-        .await
-        .into_report()
-        .change_context(Error::Btle)?;
+    let peripheral = adapter.peripheral(&id).await.map_err(Error::Btle)?;
 
-    if peripheral
-        .connect()
-        .await
-        .into_report()
-        .change_context(Error::Btle)
-        .is_ok()
+    if peripheral.connect().await.map_err(Error::Btle).is_ok()
         && peripheral
             .discover_services()
             .await
-            .into_report()
-            .change_context(Error::Btle)
+            .map_err(Error::Btle)
             .is_ok()
     {
         if let Some(characteristic) = peripheral
@@ -62,17 +43,12 @@ pub async fn write(
             let _ = peripheral
                 .write(&characteristic, data, WriteType::WithoutResponse)
                 .await
-                .into_report()
-                .change_context(Error::Btle);
+                .map_err(Error::Btle);
         }
     }
 
     time::sleep(Duration::from_secs(1)).await;
-    peripheral
-        .disconnect()
-        .await
-        .into_report()
-        .change_context(Error::Btle)?;
+    peripheral.disconnect().await.map_err(Error::Btle)?;
 
     Ok(())
 }
