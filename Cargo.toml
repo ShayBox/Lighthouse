@@ -1,25 +1,28 @@
 [package]
 name = "lighthouse"
 description = "Virtual reality basestation power management in Rust"
-version = "1.1.1"
+version = "1.2.0"
 authors = ["Shayne Hartford <shaybox@shaybox.com>"]
 edition = "2021"
 readme = "README.md"
 repository = "https://github.com/ShayBox/Lighthouse"
 license = "MIT"
+keywords = ["bluetooth", "valve", "htc", "basestation", "lighthouse"]
+categories = ["asynchronous", "command-line-utilities", "hardware-support"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-uuid = "1"
-serde = "1"
 btleplug = { version = "0.11", features = ["serde"] }
-tokio = { version = "1", features = ["full"] }
-tracing = "0.1"
-tracing-subscriber = "0.3"
-clap-verbosity-flag = { git = "https://github.com/ShayBoxs-Forks/clap-verbosity-flag.git", default-features = false, features = ["tracing"] }
 clap = "4"
+clap-verbosity-flag = "2"
+serde = "1"
 thiserror = "1"
+tokio = { version = "1", features = ["macros"] }
+tracing = "0.1"
+tracing-log = "0.2"
+tracing-subscriber = "0.3"
+uuid = "1"
 
 # https://github.com/johnthagen/min-sized-rust
 [profile.release]
@@ -27,3 +30,10 @@ strip = true      # Automatically strip symbols from the binary.
 opt-level = "z"   # Optimize for size.
 lto = true
 codegen-units = 1
+panic = "abort"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+multiple_crate_versions = "allow"

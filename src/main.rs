@@ -5,11 +5,15 @@ use btleplug::{
     platform::Manager,
 };
 use clap::Parser;
-use clap_verbosity_flag::tracing::Verbosity;
+use clap_verbosity_flag::Verbosity;
 use lighthouse::Error;
 use tokio::time;
 use tracing::info;
+use tracing_log::AsTrace;
 use uuid::Uuid;
+
+const V1_UUID: &str = "0000cb01-0000-1000-8000-00805f9b34fb";
+const V2_UUID: &str = "00001525-1212-efde-1523-785feabcd124";
 
 #[derive(Debug, Parser)]
 struct Args {
@@ -25,12 +29,12 @@ struct Args {
     verbose: Verbosity,
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Error> {
     let args = Args::parse();
 
     tracing_subscriber::fmt()
-        .with_max_level(args.verbose.tracing_level_filter())
+        .with_max_level(args.verbose.log_level_filter().as_trace())
         .init();
 
     let manager = Manager::new().await.map_err(Error::Btle)?;
@@ -39,7 +43,7 @@ async fn main() -> Result<(), Error> {
         return Err(Error::Message("No Bluetooth adapters found"));
     }
 
-    for adapter in adapters.iter() {
+    for adapter in &adapters {
         let info = adapter.adapter_info().await.map_err(Error::Btle)?;
         info!("Starting scan on {info}...");
 
@@ -57,7 +61,7 @@ async fn main() -> Result<(), Error> {
             ));
         }
 
-        for peripheral in peripherals.iter() {
+        for peripheral in &peripherals {
             let Some(properties) = peripheral.properties().await.map_err(Error::Btle)? else {
                 continue;
             };
@@ -95,8 +99,7 @@ async fn main() -> Result<(), Error> {
                     }
                 };
 
-                const UUID: &str = "0000cb01-0000-1000-8000-00805f9b34fb";
-                let uuid = Uuid::parse_str(UUID).map_err(Error::Uuid)?;
+                let uuid = Uuid::parse_str(V1_UUID).map_err(Error::Uuid)?;
 
                 lighthouse::write(adapter, peripheral.id(), &cmd, uuid).await?;
             } else {
@@ -115,8 +118,7 @@ async fn main() -> Result<(), Error> {
                     }
                 };
 
-                const UUID: &str = "00001525-1212-efde-1523-785feabcd124";
-                let uuid = Uuid::parse_str(UUID).map_err(Error::Uuid)?;
+                let uuid = Uuid::parse_str(V2_UUID).map_err(Error::Uuid)?;
 
                 lighthouse::write(adapter, peripheral.id(), &cmd, uuid).await?;
             };

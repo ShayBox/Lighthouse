@@ -20,6 +20,10 @@ pub enum Error {
     Message(&'static str),
 }
 
+/// # Write to a device
+///
+/// # Errors
+/// Will return `Err` if `X` fails.
 pub async fn write(
     adapter: &Adapter,
     id: PeripheralId,
@@ -28,22 +32,33 @@ pub async fn write(
 ) -> Result<(), Error> {
     let peripheral = adapter.peripheral(&id).await.map_err(Error::Btle)?;
 
-    if peripheral.connect().await.map_err(Error::Btle).is_ok()
-        && peripheral
-            .discover_services()
+    if peripheral.connect().await.map_err(Error::Btle).is_err() {
+        return Err(Error::Message("Failed to connect"));
+    }
+
+    if peripheral
+        .discover_services()
+        .await
+        .map_err(Error::Btle)
+        .is_err()
+    {
+        peripheral.disconnect().await.map_err(Error::Btle)?;
+        return Err(Error::Message("Failed to scan"));
+    }
+
+    let characteristic = peripheral
+        .characteristics()
+        .into_iter()
+        .find(|c| c.uuid == uuid);
+
+    if let Some(characteristic) = characteristic {
+        if peripheral
+            .write(&characteristic, data, WriteType::WithoutResponse)
             .await
             .map_err(Error::Btle)
-            .is_ok()
-    {
-        if let Some(characteristic) = peripheral
-            .characteristics()
-            .into_iter()
-            .find(|c| c.uuid == uuid)
+            .is_err()
         {
-            let _ = peripheral
-                .write(&characteristic, data, WriteType::WithoutResponse)
-                .await
-                .map_err(Error::Btle);
+            return Err(Error::Message("Failed to write"));
         }
     }
 
