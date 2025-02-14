@@ -8,7 +8,7 @@ use clap::Parser;
 use clap_verbosity_flag::Verbosity;
 use lighthouse::Error;
 use tokio::time;
-use tracing::info;
+use tracing::{info};
 use tracing_log::AsTrace;
 use uuid::Uuid;
 
@@ -17,7 +17,7 @@ const V2_UUID: &str = "00001525-1212-efde-1523-785feabcd124";
 
 #[derive(Debug, Parser)]
 struct Args {
-    /// V1: [OFF|ON] [BSID] | V2: [OFF|ON|STANDBY]
+    /// V1: [OFF|ON] [BSID] | V2: [OFF|ON|STANDBY] (BSID)
     #[arg(short, long)]
     state: String,
 
@@ -27,6 +27,9 @@ struct Args {
 
     #[clap(flatten)]
     verbose: Verbosity,
+
+    #[arg(short, long, default_value_t = 10)]
+    timeout: u64
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -52,7 +55,8 @@ async fn main() -> Result<(), Error> {
             .await
             .map_err(Error::Btle)
             .expect("Can't scan BLE adapter for connected devices...");
-        time::sleep(Duration::from_secs(10)).await;
+
+        time::sleep(Duration::from_secs(args.timeout)).await;
 
         let peripherals = adapter.peripherals().await.map_err(Error::Btle)?;
         if peripherals.is_empty() {
@@ -71,7 +75,34 @@ async fn main() -> Result<(), Error> {
             };
 
             let state = args.state.to_uppercase();
-            if let Some(bsid) = &args.bsid {
+
+            info!("Found '{}' [{}]", name, peripheral.id());
+
+            if name.starts_with("LHB-") // v2
+            {
+                if let Some(bsid) = &args.bsid
+                {
+                    if !peripheral.id().to_string().eq_ignore_ascii_case(bsid) {
+                        continue;
+                    }
+                }
+
+                let cmd = match state.as_str() {
+                    "OFF" => vec![0x00],
+                    "ON" => vec![0x01],
+                    "STANDBY" => vec![0x02],
+                    _ => {
+                        return Err(Error::Message(
+                            "V2: Unknown State {state}, Available: [OFF|ON|STANDBY]",
+                        ))
+                    }
+                };
+
+                let uuid = Uuid::parse_str(V2_UUID).map_err(Error::Uuid)?;
+
+                lighthouse::write(adapter, peripheral.id(), &cmd, uuid).await?;
+            }
+            else if let Some(bsid) = &args.bsid { // v1
                 if !name.starts_with("HTC BS")
                     || name[(name.len() - 4)..] != bsid[(bsid.len() - 4)..]
                 {
@@ -84,7 +115,7 @@ async fn main() -> Result<(), Error> {
                 let dd = u8::from_str_radix(&bsid[6..8], 16).map_err(Error::Std)?;
 
                 let cmd = match state.as_str() {
-                    "OFF" => vec![
+                    "OFF" | "STANDBY" => vec![
                         0x12, 0x02, 0x00, 0x01, dd, cc, bb, aa, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                         0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                     ],
@@ -102,26 +133,9 @@ async fn main() -> Result<(), Error> {
                 let uuid = Uuid::parse_str(V1_UUID).map_err(Error::Uuid)?;
 
                 lighthouse::write(adapter, peripheral.id(), &cmd, uuid).await?;
-            } else {
-                if !name.starts_with("LHB-") {
-                    continue;
-                }
-
-                let cmd = match state.as_str() {
-                    "OFF" => vec![0x00],
-                    "ON" => vec![0x01],
-                    "STANDBY" => vec![0x02],
-                    _ => {
-                        return Err(Error::Message(
-                            "V2: Unknown State {state}, Available: [OFF|ON|STANDBY]",
-                        ))
-                    }
-                };
-
-                let uuid = Uuid::parse_str(V2_UUID).map_err(Error::Uuid)?;
-
-                lighthouse::write(adapter, peripheral.id(), &cmd, uuid).await?;
-            };
+            }
+            else { continue; } // not supported
+            info!("{} [{}]: {}", name, peripheral.id(), state);
         }
     }
     Ok(())
