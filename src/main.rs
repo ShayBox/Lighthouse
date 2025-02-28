@@ -17,17 +17,18 @@ const V2_UUID: &str = "00001525-1212-efde-1523-785feabcd124";
 
 #[derive(Debug, Parser)]
 struct Args {
-    /// V1: [OFF|ON] [BSID] | V2: [OFF|ON|STANDBY] (BSID)
+    /// V1: [OFF|ON] | V2: [OFF|ON|STANDBY]
     #[arg(short, long)]
     state: String,
 
-    /// V1: Basestation BSID
+    /// V1: Basestation BSID (Required) | V2: Bluetooth Device Identifier (Optional)
     #[arg(short, long)]
     bsid: Option<String>,
 
     #[clap(flatten)]
     verbose: Verbosity,
 
+    /// Request timeout in seconds
     #[arg(short, long, default_value_t = 10)]
     timeout: u64
 }
