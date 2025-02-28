@@ -83,7 +83,11 @@ async fn main() -> Result<(), Error> {
             {
                 if let Some(bsid) = &args.bsid
                 {
-                    if !peripheral.id().to_string().eq_ignore_ascii_case(bsid) {
+                    // On Linux systems the peripheral ID will be something like "hci0/dev_A1_B2_C3_D4_E5_F6"
+                    // instead of "A1:B2:C3:D4:E5:F6". Normalize the strings to allow user input in either format.
+                    let normalized_peripheral_id = peripheral.id().to_string().to_lowercase().replace("_", ":");
+                    let normalized_input = bsid.to_lowercase().replace("_", ":");
+                    if !normalized_peripheral_id.contains(normalized_input.as_str()) {
                         continue;
                     }
                 }
