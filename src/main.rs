@@ -17,17 +17,18 @@ const V2_UUID: &str = "00001525-1212-efde-1523-785feabcd124";
 
 #[derive(Debug, Parser)]
 struct Args {
-    /// V1: [OFF|ON] [BSID] | V2: [OFF|ON|STANDBY] (BSID)
+    /// V1: [OFF|ON] | V2: [OFF|ON|STANDBY]
     #[arg(short, long)]
     state: String,
 
-    /// V1: Basestation BSID
+    /// V1: Basestation BSID (Required) | V2: Bluetooth Device Identifier (Optional)
     #[arg(short, long)]
     bsid: Option<String>,
 
     #[clap(flatten)]
     verbose: Verbosity,
 
+    /// Request timeout in seconds
     #[arg(short, long, default_value_t = 10)]
     timeout: u64
 }
@@ -82,7 +83,11 @@ async fn main() -> Result<(), Error> {
             {
                 if let Some(bsid) = &args.bsid
                 {
-                    if !peripheral.id().to_string().eq_ignore_ascii_case(bsid) {
+                    // On Linux systems the peripheral ID will be something like "hci0/dev_A1_B2_C3_D4_E5_F6"
+                    // instead of "A1:B2:C3:D4:E5:F6". Normalize the strings to allow user input in either format.
+                    let normalized_peripheral_id = peripheral.id().to_string().to_lowercase().replace("_", ":");
+                    let normalized_input = bsid.to_lowercase().replace("_", ":");
+                    if !normalized_peripheral_id.contains(normalized_input.as_str()) {
                         continue;
                     }
                 }
