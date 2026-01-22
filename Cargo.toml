@@ -1,9 +1,9 @@
 [package]
 name = "lighthouse"
 description = "Virtual reality basestation power management in Rust"
-version = "1.3.2"
+version = "1.4.0"
 authors = ["Shayne Hartford <shaybox@shaybox.com>"]
-edition = "2021"
+edition = "2024"
 readme = "README.md"
 repository = "https://github.com/ShayBox/Lighthouse"
 license = "MIT"
