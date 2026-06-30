@@ -22,6 +22,9 @@ Options:
   -v, --verbose...         Increase logging verbosity
   -q, --quiet...           Decrease logging verbosity
   -t, --timeout <TIMEOUT>  Request timeout in seconds [default: 10]
+      --retries <RETRIES>  Number of write attempts per basestation [default: 3]
+      --retry-delay <RETRY_DELAY>
+                            Delay between write attempts in seconds [default: 2]
   -h, --help               Print help
 ```
 

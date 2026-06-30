@@ -3,7 +3,7 @@ use std::time::Duration;
 use clap::Parser;
 use clap_verbosity_flag::Verbosity;
 use lighthouse::Error;
-use tracing::info;
+use tracing::{info, warn};
 use tracing_log::AsTrace;
 use uuid::Uuid;
 
@@ -26,18 +26,25 @@ struct Args {
     /// Request timeout in seconds
     #[arg(short, long, default_value_t = 10)]
     timeout: u64,
+
+    /// Number of write attempts per basestation
+    #[arg(long, default_value_t = 3)]
+    retries: u32,
+
+    /// Delay between write attempts in seconds
+    #[arg(long, default_value_t = 2)]
+    retry_delay: u64,
 }
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Error> {
     let args = Args::parse();
     let state = args.state.to_uppercase();
-    let normalized_bsid_inputs = (!args.bsid.is_empty()).then(|| {
-        args.bsid
-            .iter()
-            .map(|input| input.to_lowercase().replace('_', ":"))
-            .collect::<Vec<_>>()
-    });
+    let normalized_bsid_inputs = args
+        .bsid
+        .iter()
+        .map(|input| input.to_lowercase().replace('_', ":"))
+        .collect::<Vec<_>>();
 
     tracing_subscriber::fmt()
         .with_max_level(args.verbose.log_level_filter().as_trace())
@@ -55,36 +62,138 @@ async fn main() -> Result<(), Error> {
         let info = lighthouse::adapter_info(adapter).await?;
         info!("Starting scan on {info}...");
 
-        let peripherals =
-            lighthouse::scan_peripherals(adapter, Duration::from_secs(args.timeout)).await?;
+        let peripherals = lighthouse::scan_peripherals_until(
+            adapter,
+            Duration::from_secs(args.timeout),
+            |peripherals| {
+                all_requested_targets_found(peripherals, &args.bsid, &normalized_bsid_inputs)
+            },
+        )
+        .await?;
         if peripherals.is_empty() {
             return Err(Error::Message(String::from(
                 "->>> BLE peripheral devices were not found. Exiting...",
             )));
         }
 
+        let mut failures = Vec::new();
         for peripheral in &peripherals {
             let peripheral_id_str = peripheral.id.to_string();
             info!("Found '{}' [{}]", peripheral.name, peripheral_id_str);
 
             if peripheral.name.starts_with("LHB-") {
                 // V2
-                if !matches_v2_bsid(&peripheral_id_str, normalized_bsid_inputs.as_deref()) {
+                if !matches_v2_bsid(&peripheral_id_str, optional_inputs(&normalized_bsid_inputs)) {
                     continue;
                 }
                 let cmd = v2_cmd(&state)?;
-                lighthouse::write(adapter, &peripheral.id, &cmd, v2_uuid).await?;
+                if let Err(error) = write_with_retries(
+                    adapter,
+                    peripheral,
+                    &cmd,
+                    v2_uuid,
+                    args.retries.max(1),
+                    Duration::from_secs(args.retry_delay),
+                )
+                .await
+                {
+                    failures.push(format!(
+                        "{} [{}]: {error}",
+                        peripheral.name, peripheral_id_str
+                    ));
+                    continue;
+                }
             } else if let Some(bsid) = matches_v1_bsid(&peripheral.name, &args.bsid) {
                 // v1
                 let cmd = v1_cmd(&state, bsid)?;
-                lighthouse::write(adapter, &peripheral.id, &cmd, v1_uuid).await?;
+                if let Err(error) = write_with_retries(
+                    adapter,
+                    peripheral,
+                    &cmd,
+                    v1_uuid,
+                    args.retries.max(1),
+                    Duration::from_secs(args.retry_delay),
+                )
+                .await
+                {
+                    failures.push(format!(
+                        "{} [{}]: {error}",
+                        peripheral.name, peripheral_id_str
+                    ));
+                    continue;
+                }
             } else {
                 continue;
             } // not supported
             info!("{} [{}]: {}", peripheral.name, peripheral_id_str, state);
         }
+
+        if !failures.is_empty() {
+            return Err(Error::Message(format!(
+                "Failed to update basestation(s): {}",
+                failures.join("; ")
+            )));
+        }
     }
     Ok(())
+}
+
+async fn write_with_retries(
+    adapter: &btleplug::platform::Adapter,
+    peripheral: &lighthouse::DiscoveredPeripheral,
+    cmd: &[u8],
+    uuid: Uuid,
+    retries: u32,
+    retry_delay: Duration,
+) -> Result<(), Error> {
+    for attempt in 1..=retries {
+        match lighthouse::write(adapter, &peripheral.id, cmd, uuid).await {
+            Ok(()) => return Ok(()),
+            Err(error) if attempt == retries => return Err(error),
+            Err(error) => {
+                warn!(
+                    "Attempt {attempt}/{retries} failed for '{}' [{}]: {error}",
+                    peripheral.name, peripheral.id
+                );
+                tokio::time::sleep(retry_delay).await;
+            }
+        }
+    }
+
+    Err(Error::Message(String::from("No write attempts were made")))
+}
+
+fn optional_inputs(inputs: &[String]) -> Option<&[String]> {
+    (!inputs.is_empty()).then_some(inputs)
+}
+
+fn all_requested_targets_found(
+    peripherals: &[lighthouse::DiscoveredPeripheral],
+    bsids: &[String],
+    normalized_bsid_inputs: &[String],
+) -> bool {
+    if bsids.is_empty() {
+        return false;
+    }
+
+    bsids
+        .iter()
+        .zip(normalized_bsid_inputs)
+        .all(|(bsid, normalized_bsid)| {
+            peripherals.iter().any(|peripheral| {
+                let peripheral_id_str = peripheral.id.to_string();
+                if peripheral.name.starts_with("LHB-")
+                    && matches_v2_bsid(
+                        &peripheral_id_str,
+                        Some(std::slice::from_ref(normalized_bsid)),
+                    )
+                {
+                    return true;
+                }
+
+                matches_v1_bsid(&peripheral.name, std::slice::from_ref(bsid)).is_some()
+            })
+        })
 }
 
 fn matches_v2_bsid(peripheral_id: &str, normalized_inputs: Option<&[String]>) -> bool {

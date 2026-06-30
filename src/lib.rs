@@ -47,13 +47,43 @@ pub async fn scan_peripherals(
     adapter: &Adapter,
     timeout: Duration,
 ) -> Result<Vec<DiscoveredPeripheral>, Error> {
+    scan_peripherals_until(adapter, timeout, |_| false).await
+}
+
+/// # Errors
+/// Returns `Err` if scanning or peripheral enumeration fails.
+pub async fn scan_peripherals_until(
+    adapter: &Adapter,
+    timeout: Duration,
+    mut is_complete: impl FnMut(&[DiscoveredPeripheral]) -> bool,
+) -> Result<Vec<DiscoveredPeripheral>, Error> {
     adapter
         .start_scan(ScanFilter::default())
         .await
         .map_err(Error::Btle)?;
 
-    time::sleep(timeout).await;
+    let scan_started = time::Instant::now();
+    let mut discovered = Vec::new();
+    while scan_started.elapsed() < timeout {
+        time::sleep(Duration::from_millis(250)).await;
+        discovered = discovered_peripherals(adapter).await?;
+        if is_complete(&discovered) {
+            break;
+        }
+    }
 
+    if let Err(error) = adapter.stop_scan().await {
+        tracing::debug!("Failed to stop scan: {error}");
+    }
+
+    if discovered.is_empty() {
+        discovered = discovered_peripherals(adapter).await?;
+    }
+
+    Ok(discovered)
+}
+
+async fn discovered_peripherals(adapter: &Adapter) -> Result<Vec<DiscoveredPeripheral>, Error> {
     let peripherals = adapter.peripherals().await.map_err(Error::Btle)?;
     let mut discovered = Vec::new();
     for peripheral in peripherals {
