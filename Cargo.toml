@@ -1,7 +1,7 @@
 [package]
 name = "lighthouse"
 description = "Virtual reality basestation power management in Rust"
-version = "1.5.0"
+version = "2.0.0"
 authors = ["Shayne Hartford <shaybox@shaybox.com>"]
 edition = "2024"
 readme = "README.md"
@@ -9,6 +9,7 @@ repository = "https://github.com/ShayBox/Lighthouse"
 license = "MIT"
 keywords = ["bluetooth", "valve", "htc", "basestation", "lighthouse"]
 categories = ["asynchronous", "command-line-utilities", "hardware-support"]
+build = "build.rs"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -16,20 +17,30 @@ categories = ["asynchronous", "command-line-utilities", "hardware-support"]
 name = "lighthouse"
 required-features = ["cli"]
 
+[lib]
+name = "lighthouse"
+path = "src/lib.rs"
+crate-type = ["rlib", "cdylib"]
+
 [features]
-cli = ["clap", "clap-verbosity-flag", "tracing", "tracing-log", "tracing-subscriber"]
-tracing = ["dep:tracing"]
+default = ["ffi"]
+cli = ["clap", "clap-verbosity-flag", "log", "tracing-log", "tracing-subscriber"]
+ffi = []
+log = ["dep:tracing"]
 
 [dependencies]
 btleplug = { version = "0.12", features = ["serde"] }
 clap = { version = "4", optional = true }
 clap-verbosity-flag = { version = "3", optional = true }
 thiserror = "2"
-tokio = { version = "1", features = ["macros"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tracing = { version = "0.1", optional = true }
 tracing-log = { version = "0.2", optional = true }
 tracing-subscriber = { version = "0.3", optional = true }
 uuid = "1"
+
+[build-dependencies]
+cbindgen = "0.29"
 
 # https://github.com/johnthagen/min-sized-rust
 [profile.release]

@@ -1,3 +1,5 @@
+pub mod ffi;
+
 use std::{fmt, str::FromStr, sync::LazyLock, time::Duration};
 
 use btleplug::{
@@ -55,7 +57,12 @@ impl BaseStationVersion {
     /// For V2, returns `Some(())` as an empty string marker if the peripheral matches,
     /// or `None` if it does not match.
     #[must_use]
-    pub fn matches_bsid(&self, name: &str, peripheral_id: &str, bsids: &[String]) -> Option<String> {
+    pub fn matches_bsid(
+        &self,
+        name: &str,
+        peripheral_id: &str,
+        bsids: &[String],
+    ) -> Option<String> {
         match self {
             Self::V1 => matches_v1_bsid(name, bsids).map(String::from),
             Self::V2 => {
@@ -279,33 +286,25 @@ pub async fn process_peripheral(
     };
 
     // V2 returns empty string (no BSID needed), V1 returns the actual BSID
-    let bsid_for_cmd = if bsid.is_empty() { None } else { Some(bsid.as_str()) };
+    let bsid_for_cmd = if bsid.is_empty() {
+        None
+    } else {
+        Some(bsid.as_str())
+    };
     let cmd = version.command(state, bsid_for_cmd)?;
     let uuid = *version.uuid();
 
-    write_with_retries(
-        adapter,
-        peripheral,
-        &cmd,
-        uuid,
-        retries.max(1),
-        retry_delay,
-    )
-    .await?;
+    write_with_retries(adapter, peripheral, &cmd, uuid, retries.max(1), retry_delay).await?;
 
     Ok(Some(format!(
         "{} [{}]: {state}",
-        peripheral.name,
-        peripheral_id_str
+        peripheral.name, peripheral_id_str
     )))
 }
 
 /// Checks if all requested targets have been found in the discovered peripherals.
 #[must_use]
-pub fn all_requested_targets_found(
-    peripherals: &[DiscoveredPeripheral],
-    bsids: &[String],
-) -> bool {
+pub fn all_requested_targets_found(peripherals: &[DiscoveredPeripheral], bsids: &[String]) -> bool {
     if bsids.is_empty() {
         return false;
     }
@@ -317,11 +316,13 @@ pub fn all_requested_targets_found(
                 return false;
             };
 
-            version.matches_bsid(
-                &peripheral.name,
-                &peripheral_id_str,
-                std::slice::from_ref(bsid),
-            ).is_some()
+            version
+                .matches_bsid(
+                    &peripheral.name,
+                    &peripheral_id_str,
+                    std::slice::from_ref(bsid),
+                )
+                .is_some()
         })
     })
 }
@@ -352,7 +353,7 @@ pub async fn write_with_retries(
             Err(error) if attempt == retries => return Err(error),
             #[allow(unused_variables)]
             Err(error) => {
-                #[cfg(feature = "tracing")]
+                #[cfg(feature = "log")]
                 tracing::warn!(
                     attempt,
                     retries,
@@ -441,7 +442,7 @@ pub async fn scan_peripherals_until(
 
     #[allow(unused_variables)]
     if let Err(error) = adapter.stop_scan().await {
-        #[cfg(feature = "tracing")]
+        #[cfg(feature = "log")]
         tracing::debug!(%error, "Failed to stop scan");
     }
 
