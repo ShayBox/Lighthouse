@@ -1,6 +1,6 @@
 on:
   release:
-    types: [created]
+    types: [ created ]
 
 jobs:
   release:
@@ -47,7 +47,7 @@ jobs:
         run: rustup target add ${{ matrix.target }}
 
       - name: Build Release Binary
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --bin lighthouse --features cli --target ${{ matrix.target }}
 
       - name: Create Zip Archive (Windows)
         if: ${{ matrix.runner == 'windows-latest' }}
