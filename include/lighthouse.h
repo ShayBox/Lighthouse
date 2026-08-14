@@ -6,6 +6,12 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+/**
+ * ABI version of the FFI interface.
+ * Increment this whenever the C API is changed incompatibly.
+ */
+#define LIGHTHOUSE_ABI_VERSION 1
+
 typedef enum {
   Success = 0,
   /**
@@ -52,6 +58,15 @@ typedef enum {
   Standby = 2,
 } LighthouseState;
 
+/**
+ * Base station version detection
+ */
+typedef enum {
+  Unknown = 0,
+  V1 = 1,
+  V2 = 2,
+} BaseStationVersion;
+
 typedef uint64_t Handle;
 
 /**
@@ -63,6 +78,17 @@ typedef uint64_t Handle;
  * `LighthouseError::Success` on success, or an error code.
  */
 LighthouseError lighthouse_init(void);
+
+/**
+ * Returns the ABI version of the FFI interface.
+ *
+ * Use this to verify at runtime that the loaded library
+ * is compatible with the expected API version.
+ *
+ * # Returns
+ * The current ABI version number.
+ */
+uint32_t lighthouse_abi_version(void);
 
 /**
  * Discovers available Bluetooth adapters.
@@ -98,13 +124,10 @@ LighthouseError lighthouse_discover_adapters(Handle *handles, uint32_t *count);
  * `handles` must be a valid pointer to an array of at least `*count` `Handle` elements.
  * `count` must be a valid pointer to a `u32`.
  * `bsids` if not null must point to an array of `bsid_count` null-terminated strings.
- *
- * # Panics
- * Panics if the arena lock is poisoned during the scan write phase.
  */
 LighthouseError lighthouse_scan(Handle adapter_handle,
                                 uint32_t timeout_sec,
-                                const int8_t *const *bsids,
+                                const char *const *bsids,
                                 uint32_t bsid_count,
                                 Handle *handles,
                                 uint32_t *count);
@@ -129,7 +152,7 @@ LighthouseError lighthouse_scan(Handle adapter_handle,
 LighthouseError lighthouse_set_state(Handle adapter_handle,
                                      Handle peripheral_handle,
                                      LighthouseState state,
-                                     const int8_t *bsid,
+                                     const char *bsid,
                                      uint32_t retries,
                                      uint32_t retry_delay_sec);
 
@@ -146,7 +169,7 @@ LighthouseError lighthouse_set_state(Handle adapter_handle,
  * # Safety
  * `info_out` must be a valid pointer to a `*const i8`.
  */
-LighthouseError lighthouse_adapter_info(Handle adapter_handle, const int8_t **info_out);
+LighthouseError lighthouse_adapter_info(Handle adapter_handle, const char **info_out);
 
 /**
  * Gets the name of a peripheral.
@@ -161,7 +184,7 @@ LighthouseError lighthouse_adapter_info(Handle adapter_handle, const int8_t **in
  * # Safety
  * `name_out` must be a valid pointer to a `*const i8`.
  */
-LighthouseError lighthouse_peripheral_name(Handle peripheral_handle, const int8_t **name_out);
+LighthouseError lighthouse_peripheral_name(Handle peripheral_handle, const char **name_out);
 
 /**
  * Gets the ID string of a peripheral.
@@ -176,7 +199,7 @@ LighthouseError lighthouse_peripheral_name(Handle peripheral_handle, const int8_
  * # Safety
  * `id_out` must be a valid pointer to a `*const i8`.
  */
-LighthouseError lighthouse_peripheral_id(Handle peripheral_handle, const int8_t **id_out);
+LighthouseError lighthouse_peripheral_id(Handle peripheral_handle, const char **id_out);
 
 /**
  * Detects the base station version from a device name.
@@ -185,12 +208,12 @@ LighthouseError lighthouse_peripheral_id(Handle peripheral_handle, const int8_t 
  * * `name` - Device name string
  *
  * # Returns
- * `LighthouseBaseStationVersion` value, or -1 if unknown.
+ * `BaseStationVersion` value.
  *
  * # Safety
  * `name` must be a valid null-terminated UTF-8 string.
  */
-int32_t lighthouse_detect_version(const int8_t *name);
+BaseStationVersion lighthouse_detect_version(const char *name);
 
 /**
  * Releases a handle, freeing the associated resources.
@@ -214,7 +237,7 @@ LighthouseError lighthouse_release_handle(Handle handle);
  * that the caller is responsible for freeing it. Must not be called twice
  * on the same pointer.
  */
-void lighthouse_free_string(int8_t *ptr);
+void lighthouse_free_string(char *ptr);
 
 /**
  * Gets the last error message.
@@ -223,7 +246,7 @@ void lighthouse_free_string(int8_t *ptr);
  * A null-terminated string. The pointer is valid until the next FFI call
  * on the same thread. Do not free.
  */
-const int8_t *lighthouse_last_error(void);
+const char *lighthouse_last_error(void);
 
 /**
  * Checks if all requested BSID targets have been found in a list of peripherals.
@@ -243,7 +266,7 @@ const int8_t *lighthouse_last_error(void);
  */
 int32_t lighthouse_all_targets_found(const Handle *peripheral_handles,
                                      uint32_t peripheral_count,
-                                     const int8_t *const *bsids,
+                                     const char *const *bsids,
                                      uint32_t bsid_count);
 
 #endif  /* LIGHTHOUSE_H */

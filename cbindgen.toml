@@ -3,7 +3,7 @@ style = "type"
 include_guard = "LIGHTHOUSE_H"
 
 [export]
-exclude = ["DiscoveredPeripheral", "Error", "State", "BaseStationVersion"]
+exclude = ["DiscoveredPeripheral", "Error", "State"]
 
 [parse]
 parse_deps = false

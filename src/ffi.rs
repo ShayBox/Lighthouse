@@ -1,7 +1,7 @@
 use std::{
     cell::RefCell,
     collections::HashMap,
-    ffi::{CStr, CString},
+    ffi::{CStr, CString, c_char},
     sync::{OnceLock, RwLock},
     time::Duration,
 };
@@ -18,8 +18,12 @@ use crate::{
     adapters,
     all_requested_targets_found,
     process_peripheral,
-    scan_peripherals,
+    scan_peripherals_until,
 };
+
+/// ABI version of the FFI interface.
+/// Increment this whenever the C API is changed incompatibly.
+pub const LIGHTHOUSE_ABI_VERSION: u32 = 1;
 
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
 
@@ -162,6 +166,18 @@ pub extern "C" fn lighthouse_init() -> LighthouseError {
     LighthouseError::Success
 }
 
+/// Returns the ABI version of the FFI interface.
+///
+/// Use this to verify at runtime that the loaded library
+/// is compatible with the expected API version.
+///
+/// # Returns
+/// The current ABI version number.
+#[unsafe(no_mangle)]
+pub const extern "C" fn lighthouse_abi_version() -> u32 {
+    LIGHTHOUSE_ABI_VERSION
+}
+
 /// Discovers available Bluetooth adapters.
 ///
 /// # Arguments
@@ -180,6 +196,7 @@ pub unsafe extern "C" fn lighthouse_discover_adapters(
     count: *mut u32,
 ) -> LighthouseError {
     if handles.is_null() || count.is_null() {
+        unsafe { *count = 0 }
         return LighthouseError::NullPointer;
     }
 
@@ -187,8 +204,8 @@ pub unsafe extern "C" fn lighthouse_discover_adapters(
     let result = runtime().block_on(async {
         match adapters().await {
             Ok(adapters) => Ok(adapters),
-            Err(e) => {
-                set_last_error(&format!("Failed to discover adapters: {e}"));
+            Err(error) => {
+                set_last_error(&format!("Failed to discover adapters: {error}"));
                 Err(LighthouseError::NoAdapters)
             }
         }
@@ -196,10 +213,14 @@ pub unsafe extern "C" fn lighthouse_discover_adapters(
 
     let adapters = match result {
         Ok(a) => a,
-        Err(e) => return e,
+        Err(error) => unsafe {
+            *count = 0;
+            return error;
+        },
     };
 
     let Ok(mut arena) = arena().write() else {
+        unsafe { *count = 0 }
         set_last_error("Arena lock poisoned");
         return LighthouseError::Unknown;
     };
@@ -209,15 +230,11 @@ pub unsafe extern "C" fn lighthouse_discover_adapters(
 
     for adapter in adapters.iter().take(num_to_copy) {
         let handle = arena.alloc_adapter(adapter.clone());
-        unsafe {
-            *handles.add(handles_written as usize) = handle;
-        }
+        unsafe { *handles.add(handles_written as usize) = handle }
         handles_written += 1;
     }
 
-    unsafe {
-        *count = handles_written;
-    }
+    unsafe { *count = handles_written }
     drop(arena);
     set_last_error(&format!("Discovered {handles_written} adapter(s)"));
     LighthouseError::Success
@@ -240,35 +257,36 @@ pub unsafe extern "C" fn lighthouse_discover_adapters(
 /// `handles` must be a valid pointer to an array of at least `*count` `Handle` elements.
 /// `count` must be a valid pointer to a `u32`.
 /// `bsids` if not null must point to an array of `bsid_count` null-terminated strings.
-///
-/// # Panics
-/// Panics if the arena lock is poisoned during the scan write phase.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lighthouse_scan(
     adapter_handle: Handle,
     timeout_sec: u32,
-    bsids: *const *const i8,
+    bsids: *const *const c_char,
     bsid_count: u32,
     handles: *mut Handle,
     count: *mut u32,
 ) -> LighthouseError {
     if handles.is_null() || count.is_null() {
+        unsafe { *count = 0 }
         return LighthouseError::NullPointer;
     }
 
-    let Some(_bsid_list) = parse_string_array(bsids, bsid_count) else {
+    let Some(bsid_list) = parse_string_array(bsids, bsid_count) else {
+        unsafe { *count = 0 }
         return LighthouseError::NullPointer;
     };
 
     // Clone adapter out of arena before block_on to avoid holding lock during async ops
     let adapter = {
         let Ok(arena) = arena().read() else {
+            unsafe { *count = 0 }
             set_last_error("Arena lock poisoned");
             return LighthouseError::Unknown;
         };
         if let Some(a) = arena.get_adapter(adapter_handle) {
             a.clone()
         } else {
+            unsafe { *count = 0 }
             set_last_error("Invalid adapter handle");
             return LighthouseError::InvalidHandle;
         }
@@ -278,29 +296,38 @@ pub unsafe extern "C" fn lighthouse_scan(
     let timeout = Duration::from_secs(u64::from(timeout_sec));
 
     let result = runtime().block_on(async {
-        let peripherals = match scan_peripherals(&adapter, timeout).await {
+        let peripherals = match scan_peripherals_until(&adapter, timeout, {
+            let bsids = bsid_list.clone();
+            move |peripherals: &[DiscoveredPeripheral]| -> bool {
+                if bsids.is_empty() {
+                    return false;
+                }
+                all_requested_targets_found(peripherals, &bsids)
+            }
+        })
+        .await
+        {
             Ok(p) => p,
-            Err(e) => {
-                set_last_error(&format!("Scan failed: {e}"));
+            Err(error) => {
+                set_last_error(&format!("Scan failed: {error}"));
                 return Err(LighthouseError::ScanFailed);
             }
         };
 
-        let mut arena_write = arena().write().unwrap();
+        let Ok(mut arena_write) = arena().write() else {
+            set_last_error("Arena lock poisoned");
+            return Err(LighthouseError::Unknown);
+        };
         let num_to_copy = peripherals.len().min(capacity as usize);
         let mut handles_written: u32 = 0;
 
         for peripheral in peripherals.iter().take(num_to_copy) {
             let handle = arena_write.alloc_peripheral(peripheral.clone());
-            unsafe {
-                *handles.add(handles_written as usize) = handle;
-            }
+            unsafe { *handles.add(handles_written as usize) = handle }
             handles_written += 1;
         }
 
-        unsafe {
-            *count = handles_written;
-        }
+        unsafe { *count = handles_written }
         drop(arena_write);
         set_last_error(&format!("Found {handles_written} peripheral(s)"));
         Ok(())
@@ -308,7 +335,10 @@ pub unsafe extern "C" fn lighthouse_scan(
 
     match result {
         Ok(()) => LighthouseError::Success,
-        Err(e) => e,
+        Err(error) => unsafe {
+            *count = 0;
+            error
+        },
     }
 }
 
@@ -332,7 +362,7 @@ pub unsafe extern "C" fn lighthouse_set_state(
     adapter_handle: Handle,
     peripheral_handle: Handle,
     state: LighthouseState,
-    bsid: *const i8,
+    bsid: *const c_char,
     retries: u32,
     retry_delay_sec: u32,
 ) -> LighthouseError {
@@ -390,8 +420,8 @@ pub unsafe extern "C" fn lighthouse_set_state(
                 );
                 Ok(LighthouseError::Success)
             }
-            Err(e) => {
-                set_last_error(&format!("Write failed: {e}"));
+            Err(error) => {
+                set_last_error(&format!("Write failed: {error}"));
                 Err(LighthouseError::WriteFailed)
             }
         }
@@ -414,7 +444,7 @@ pub unsafe extern "C" fn lighthouse_set_state(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lighthouse_adapter_info(
     adapter_handle: Handle,
-    info_out: *mut *const i8,
+    info_out: *mut *const c_char,
 ) -> LighthouseError {
     if info_out.is_null() {
         return LighthouseError::NullPointer;
@@ -437,8 +467,8 @@ pub unsafe extern "C" fn lighthouse_adapter_info(
     let result = runtime().block_on(async {
         match adapter_info(&adapter).await {
             Ok(info) => Ok(info),
-            Err(e) => {
-                set_last_error(&format!("Failed to get adapter info: {e}"));
+            Err(error) => {
+                set_last_error(&format!("Failed to get adapter info: {error}"));
                 Err(LighthouseError::Unknown)
             }
         }
@@ -451,13 +481,11 @@ pub unsafe extern "C" fn lighthouse_adapter_info(
                 LighthouseError::AllocFailed
             },
             |c_string| {
-                unsafe {
-                    *info_out = c_string.into_raw();
-                }
+                unsafe { *info_out = c_string.into_raw() }
                 LighthouseError::Success
             },
         ),
-        Err(e) => e,
+        Err(error) => error,
     }
 }
 
@@ -475,7 +503,7 @@ pub unsafe extern "C" fn lighthouse_adapter_info(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lighthouse_peripheral_name(
     peripheral_handle: Handle,
-    name_out: *mut *const i8,
+    name_out: *mut *const c_char,
 ) -> LighthouseError {
     if name_out.is_null() {
         return LighthouseError::NullPointer;
@@ -500,9 +528,7 @@ pub unsafe extern "C" fn lighthouse_peripheral_name(
             LighthouseError::AllocFailed
         },
         |c_string| {
-            unsafe {
-                *name_out = c_string.into_raw();
-            }
+            unsafe { *name_out = c_string.into_raw() }
             LighthouseError::Success
         },
     )
@@ -522,7 +548,7 @@ pub unsafe extern "C" fn lighthouse_peripheral_name(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lighthouse_peripheral_id(
     peripheral_handle: Handle,
-    id_out: *mut *const i8,
+    id_out: *mut *const c_char,
 ) -> LighthouseError {
     if id_out.is_null() {
         return LighthouseError::NullPointer;
@@ -547,9 +573,7 @@ pub unsafe extern "C" fn lighthouse_peripheral_id(
             LighthouseError::AllocFailed
         },
         |c_string| {
-            unsafe {
-                *id_out = c_string.into_raw();
-            }
+            unsafe { *id_out = c_string.into_raw() }
             LighthouseError::Success
         },
     )
@@ -561,25 +585,21 @@ pub unsafe extern "C" fn lighthouse_peripheral_id(
 /// * `name` - Device name string
 ///
 /// # Returns
-/// `LighthouseBaseStationVersion` value, or -1 if unknown.
+/// `BaseStationVersion` value.
 ///
 /// # Safety
 /// `name` must be a valid null-terminated UTF-8 string.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn lighthouse_detect_version(name: *const i8) -> i32 {
+pub unsafe extern "C" fn lighthouse_detect_version(name: *const c_char) -> BaseStationVersion {
     if name.is_null() {
-        return -1;
+        return BaseStationVersion::Unknown;
     }
-    let c_str = unsafe { CStr::from_ptr(name) };
+    let c_str = unsafe { CStr::from_ptr(name.cast::<c_char>()) };
     let Ok(name_str) = c_str.to_str() else {
-        return -1;
+        return BaseStationVersion::Unknown;
     };
 
-    match BaseStationVersion::detect(name_str) {
-        Some(BaseStationVersion::V1) => 0,
-        Some(BaseStationVersion::V2) => 1,
-        None => -1,
-    }
+    BaseStationVersion::detect(name_str)
 }
 
 /// Releases a handle, freeing the associated resources.
@@ -620,7 +640,7 @@ pub extern "C" fn lighthouse_release_handle(handle: Handle) -> LighthouseError {
 /// that the caller is responsible for freeing it. Must not be called twice
 /// on the same pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn lighthouse_free_string(ptr: *mut i8) {
+pub unsafe extern "C" fn lighthouse_free_string(ptr: *mut c_char) {
     if !ptr.is_null() {
         let _ = unsafe { CString::from_raw(ptr) };
     }
@@ -632,8 +652,8 @@ pub unsafe extern "C" fn lighthouse_free_string(ptr: *mut i8) {
 /// A null-terminated string. The pointer is valid until the next FFI call
 /// on the same thread. Do not free.
 #[unsafe(no_mangle)]
-pub extern "C" fn lighthouse_last_error() -> *const i8 {
-    LAST_ERROR.with(|e| e.borrow().as_ptr().cast::<i8>())
+pub extern "C" fn lighthouse_last_error() -> *const c_char {
+    LAST_ERROR.with(|e| e.borrow().as_ptr().cast::<c_char>())
 }
 
 /// Checks if all requested BSID targets have been found in a list of peripherals.
@@ -654,7 +674,7 @@ pub extern "C" fn lighthouse_last_error() -> *const i8 {
 pub unsafe extern "C" fn lighthouse_all_targets_found(
     peripheral_handles: *const Handle,
     peripheral_count: u32,
-    bsids: *const *const i8,
+    bsids: *const *const c_char,
     bsid_count: u32,
 ) -> i32 {
     let Some(bsid_list) = parse_string_array(bsids, bsid_count) else {
@@ -685,7 +705,7 @@ pub unsafe extern "C" fn lighthouse_all_targets_found(
 ///
 /// # Safety
 /// `ptr` must point to an array of `count` null-terminated strings, or be NULL.
-fn parse_string_array(ptr: *const *const i8, count: u32) -> Option<Vec<String>> {
+fn parse_string_array(ptr: *const *const c_char, count: u32) -> Option<Vec<String>> {
     if ptr.is_null() || count == 0 {
         return Some(Vec::new());
     }
@@ -728,12 +748,13 @@ mod tests {
             let err = lighthouse_scan(
                 99999,
                 1,
-                [std::ptr::null()].as_ptr(),
+                [std::ptr::null::<c_char>()].as_ptr(),
                 1,
                 handles.as_mut_ptr(),
                 &raw mut count,
             );
             assert_eq!(err, LighthouseError::NullPointer);
+            assert_eq!(count, 0);
         }
     }
 
@@ -753,6 +774,37 @@ mod tests {
                 &raw mut count,
             );
             assert_eq!(err, LighthouseError::InvalidHandle);
+            assert_eq!(count, 0);
+        }
+    }
+
+    #[test]
+    fn test_abi_version() {
+        assert_eq!(lighthouse_abi_version(), LIGHTHOUSE_ABI_VERSION);
+    }
+
+    #[test]
+    fn test_detect_version() {
+        let v2_name = CString::new("LHB-001").unwrap();
+        let v1_name = CString::new("HTC BS 001").unwrap();
+        let unknown_name = CString::new("Unknown Device").unwrap();
+        unsafe {
+            assert_eq!(
+                lighthouse_detect_version(v2_name.as_ptr()),
+                BaseStationVersion::V2,
+            );
+            assert_eq!(
+                lighthouse_detect_version(v1_name.as_ptr()),
+                BaseStationVersion::V1,
+            );
+            assert_eq!(
+                lighthouse_detect_version(unknown_name.as_ptr()),
+                BaseStationVersion::Unknown,
+            );
+            assert_eq!(
+                lighthouse_detect_version(std::ptr::null()),
+                BaseStationVersion::Unknown,
+            );
         }
     }
 }

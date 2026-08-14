@@ -21,24 +21,27 @@ pub static V2_UUID: LazyLock<Uuid> = LazyLock::new(|| {
 });
 
 /// Base station version detection
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BaseStationVersion {
-    V1,
-    V2,
+    Unknown = 0,
+    V1      = 1,
+    V2      = 2,
 }
 
 impl BaseStationVersion {
     /// Detect the base station version from the device name.
     /// - V2 devices start with "LHB-"
     /// - V1 devices start with "HTC BS"
+    /// - Returns `Unknown` if the name doesn't match any known version
     #[must_use]
-    pub fn detect(name: &str) -> Option<Self> {
+    pub fn detect(name: &str) -> Self {
         if name.starts_with("LHB-") {
-            Some(Self::V2)
+            Self::V2
         } else if name.starts_with("HTC BS") {
-            Some(Self::V1)
+            Self::V1
         } else {
-            None
+            Self::Unknown
         }
     }
 
@@ -48,6 +51,7 @@ impl BaseStationVersion {
         match self {
             Self::V1 => &V1_UUID,
             Self::V2 => &V2_UUID,
+            Self::Unknown => unreachable!("Unknown version has no UUID"),
         }
     }
 
@@ -72,6 +76,7 @@ impl BaseStationVersion {
                     None
                 }
             }
+            Self::Unknown => None,
         }
     }
 
@@ -93,6 +98,7 @@ impl BaseStationVersion {
                 v1_command(state, bsid)
             }
             Self::V2 => v2_command(state),
+            Self::Unknown => Err(Error::Message("Unknown base station version".into())),
         }
     }
 }
@@ -267,15 +273,16 @@ pub async fn process_peripheral(
 ) -> Result<Option<String>, Error> {
     let peripheral_id_str = peripheral.id.to_string();
 
-    let Some(version) = BaseStationVersion::detect(&peripheral.name) else {
+    let version = BaseStationVersion::detect(&peripheral.name);
+    if version == BaseStationVersion::Unknown {
         return Ok(None);
-    };
+    }
 
     // When no BSIDs provided: V2 matches all, V1 matches none
     let bsid = if bsids.is_empty() {
         match version {
             BaseStationVersion::V2 => Some(String::new()),
-            BaseStationVersion::V1 => None,
+            BaseStationVersion::V1 | BaseStationVersion::Unknown => None,
         }
     } else {
         version.matches_bsid(&peripheral.name, &peripheral_id_str, bsids)
@@ -312,9 +319,10 @@ pub fn all_requested_targets_found(peripherals: &[DiscoveredPeripheral], bsids: 
     bsids.iter().all(|bsid| {
         peripherals.iter().any(|peripheral| {
             let peripheral_id_str = peripheral.id.to_string();
-            let Some(version) = BaseStationVersion::detect(&peripheral.name) else {
+            let version = BaseStationVersion::detect(&peripheral.name);
+            if version == BaseStationVersion::Unknown {
                 return false;
-            };
+            }
 
             version
                 .matches_bsid(
