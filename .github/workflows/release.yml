@@ -57,8 +57,8 @@ jobs:
       - name: Add Rust Target
         run: rustup target add ${{ matrix.target }}
 
-      - name: Build Release Artifacts
-        run: cargo build --release --target ${{ matrix.target }} --features cli
+      - name: Build Release Binary
+        run: cargo build --release --bin lighthouse --features cli --target ${{ matrix.target }}
 
       - name: Upload Release Assets
         shell: bash
