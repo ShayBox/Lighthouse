@@ -6,6 +6,9 @@ jobs:
   release:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      BIN_EXT: ${{ contains(matrix.target, 'windows') && '.exe' || '' }}
+      LIB_PREFIX: ${{ contains(matrix.target, 'windows') && 'lighthouse' || 'liblighthouse' }}
+      LIB_EXT: ${{ contains(matrix.target, 'windows') && '.dll' || (contains(matrix.target, 'darwin') && '.dylib' || '.so') }}
 
     strategy:
       fail-fast: false
@@ -54,16 +57,20 @@ jobs:
       - name: Add Rust Target
         run: rustup target add ${{ matrix.target }}
 
-      - name: Build Release Binary
-        run: cargo build --release --target ${{ matrix.target }}
+      - name: Build Release Artifacts
+        run: cargo build --release --target ${{ matrix.target }} --features cli
 
-      - name: Create Zip Archive (Windows)
-        if: ${{ matrix.runner == 'windows-latest' }}
-        run: bash -c '7z a ${{ matrix.name }}.zip ./target/${{ matrix.target }}/release/lighthouse.exe'
+      - name: Upload Release Assets
+        shell: bash
+        run: |
+          mkdir assets
+          cp target/${{ matrix.target }}/release/lighthouse$BIN_EXT "assets/lighthouse-${{ matrix.target }}$BIN_EXT"
+          cp target/${{ matrix.target }}/release/$LIB_PREFIX$LIB_EXT "assets/$LIB_PREFIX-${{ matrix.target }}$LIB_EXT"
+          gh release upload "${{ github.ref_name }}" ./assets include/lighthouse.h --clobber
 
-      - name: Create Zip Archive (Other)
-        if: ${{ matrix.runner != 'windows-latest' }}
-        run: zip -j ${{ matrix.name }}.zip target/${{ matrix.target }}/release/lighthouse
-
-      - name: Upload Zip Archive
-        run: gh release upload ${{ github.ref_name }} ${{ matrix.name }}.zip --clobber
+      - name: Upload Import Library (Windows)
+        if: ${{ contains(matrix.target, 'windows') }}
+        shell: bash
+        run: |
+          cp target/${{ matrix.target }}/release/$LIB_PREFIX.dll.lib "$LIB_PREFIX-${{ matrix.target }}.dll.lib"
+          gh release upload "${{ github.ref_name }}" "$LIB_PREFIX-${{ matrix.target }}.dll.lib" --clobber
