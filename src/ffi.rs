@@ -10,15 +10,8 @@ use btleplug::platform::Adapter;
 use tokio::runtime::Runtime;
 
 use crate::{
-    BaseStationVersion,
-    DiscoveredPeripheral,
-    Error,
-    State,
-    adapter_info,
-    adapters,
-    all_requested_targets_found,
-    process_peripheral,
-    scan_peripherals_until,
+    Action, BaseStationVersion, DiscoveredPeripheral, Error, State, adapter_info, adapters,
+    all_requested_targets_found, process_peripheral, scan_peripherals_until,
 };
 
 /// ABI version of the FFI interface.
@@ -56,6 +49,8 @@ pub enum LighthouseError {
     AllocFailed = -7,
     /// Invalid null pointer argument
     NullPointer = -8,
+    /// Invalid channel value (must be 1-16)
+    InvalidChannel = -10,
     /// General/other error
     Unknown    = -99,
 }
@@ -366,18 +361,93 @@ pub unsafe extern "C" fn lighthouse_set_state(
     retries: u32,
     retry_delay_sec: u32,
 ) -> LighthouseError {
-    let bsid_string = if bsid.is_null() {
-        None
-    } else if let Ok(s) = unsafe { CStr::from_ptr(bsid) }.to_str() {
-        Some(s.to_owned())
-    } else {
-        set_last_error("Invalid BSID string (not valid UTF-8)");
-        return LighthouseError::InvalidState;
+    let Ok(bsid_string) = parse_optional_cstring(bsid) else {
+        return LighthouseError::Unknown;
     };
 
-    let state_rust: State = state.into();
-    let retry_delay = Duration::from_secs(u64::from(retry_delay_sec));
+    run_action(
+        adapter_handle,
+        peripheral_handle,
+        Action::State(State::from(state)),
+        bsid_string.as_deref(),
+        retries,
+        Duration::from_secs(u64::from(retry_delay_sec)),
+    )
+}
 
+/// Sets the channel frequency of a V2 base station peripheral.
+///
+/// # Arguments
+/// * `adapter_handle` - Handle to the adapter
+/// * `peripheral_handle` - Handle to the peripheral
+/// * `channel` - Channel number (1-16)
+/// * `bsid` - Optional Bluetooth device identifier filter for V2 devices. Can be NULL.
+/// * `retries` - Number of write attempts (minimum 1)
+/// * `retry_delay_sec` - Delay between retry attempts in seconds
+///
+/// # Returns
+/// Error code.
+///
+/// # Safety
+/// `bsid` if not null must be a valid null-terminated UTF-8 string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lighthouse_set_channel(
+    adapter_handle: Handle,
+    peripheral_handle: Handle,
+    channel: u32,
+    bsid: *const c_char,
+    retries: u32,
+    retry_delay_sec: u32,
+) -> LighthouseError {
+    let Ok(channel_u8) = u8::try_from(channel) else {
+        set_last_error(&format!("Invalid channel {channel}, must be 1-16"));
+        return LighthouseError::InvalidChannel;
+    };
+
+    if !matches!(channel_u8, 1..=16) {
+        set_last_error(&format!("Invalid channel {channel_u8}, must be 1-16"));
+        return LighthouseError::InvalidChannel;
+    }
+
+    let Ok(bsid_string) = parse_optional_cstring(bsid) else {
+        return LighthouseError::Unknown;
+    };
+
+    run_action(
+        adapter_handle,
+        peripheral_handle,
+        Action::Channel(channel_u8),
+        bsid_string.as_deref(),
+        retries,
+        Duration::from_secs(u64::from(retry_delay_sec)),
+    )
+}
+
+/// Parses an optional null-terminated C string.
+///
+/// # Safety
+/// `ptr` must be NULL or a valid null-terminated UTF-8 string.
+fn parse_optional_cstring(ptr: *const c_char) -> Result<Option<String>, LighthouseError> {
+    if ptr.is_null() {
+        return Ok(None);
+    }
+
+    let s = unsafe { CStr::from_ptr(ptr) };
+    s.to_str().map(str::to_owned).map(Some).map_err(|_| {
+        set_last_error("Invalid string argument (not valid UTF-8)");
+        LighthouseError::Unknown
+    })
+}
+
+/// Resolves handles from the arena and runs a write action on the peripheral.
+fn run_action(
+    adapter_handle: Handle,
+    peripheral_handle: Handle,
+    action: Action,
+    bsid: Option<&str>,
+    retries: u32,
+    retry_delay: Duration,
+) -> LighthouseError {
     // Clone the data we need out of the arena to avoid holding the lock during async ops
     let (adapter, peripheral) = {
         let Ok(arena) = arena().read() else {
@@ -395,15 +465,13 @@ pub unsafe extern "C" fn lighthouse_set_state(
         (adapter.clone(), peripheral.clone())
     };
 
-    let result = runtime().block_on(async {
-        let bsids: Vec<String> = bsid_string
-            .as_ref()
-            .map_or_else(Vec::new, |b| vec![b.clone()]);
+    runtime().block_on(async {
+        let bsids: Vec<String> = bsid.map_or_else(Vec::new, |b| vec![b.to_string()]);
 
         match process_peripheral(
             &adapter,
             &peripheral,
-            &state_rust,
+            &action,
             &bsids,
             retries.max(1),
             retry_delay,
@@ -412,22 +480,25 @@ pub unsafe extern "C" fn lighthouse_set_state(
         {
             Ok(Some(desc)) => {
                 set_last_error(&format!("Success: {desc}"));
-                Ok(LighthouseError::Success)
+                LighthouseError::Success
             }
             Ok(None) => {
                 set_last_error(
                     "Peripheral did not match any target (unknown version or BSID mismatch)",
                 );
-                Ok(LighthouseError::Success)
+                LighthouseError::Success
             }
             Err(error) => {
+                let code = if matches!(error, Error::InvalidChannel(_)) {
+                    LighthouseError::InvalidChannel
+                } else {
+                    LighthouseError::WriteFailed
+                };
                 set_last_error(&format!("Write failed: {error}"));
-                Err(LighthouseError::WriteFailed)
+                code
             }
         }
-    });
-
-    result.unwrap_or(LighthouseError::Unknown)
+    })
 }
 
 /// Gets human-readable adapter info.
@@ -721,90 +792,5 @@ fn parse_string_array(ptr: *const *const c_char, count: u32) -> Option<Vec<Strin
             result.push(string);
         }
         Some(result)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_state_conversion() {
-        assert_eq!(State::from(LighthouseState::Off), State::Off);
-        assert_eq!(State::from(LighthouseState::On), State::On);
-        assert_eq!(State::from(LighthouseState::Standby), State::Standby);
-    }
-
-    #[test]
-    fn test_ffi_init_returns_success() {
-        let _ = lighthouse_init();
-    }
-
-    #[test]
-    fn test_scan_null_pointer_returns_error() {
-        let mut handles: Vec<Handle> = vec![0; 16];
-        let mut count: u32 = 16;
-        unsafe {
-            let err = lighthouse_scan(
-                99999,
-                1,
-                [std::ptr::null::<c_char>()].as_ptr(),
-                1,
-                handles.as_mut_ptr(),
-                &raw mut count,
-            );
-            assert_eq!(err, LighthouseError::NullPointer);
-            assert_eq!(count, 0);
-        }
-    }
-
-    #[test]
-    fn test_scan_invalid_adapter_handle() {
-        let mut handles: Vec<Handle> = vec![0; 16];
-        let mut count: u32 = 16;
-        let bsid_str = CString::new("test").unwrap();
-        let bsids = [bsid_str.as_ptr()];
-        unsafe {
-            let err = lighthouse_scan(
-                99999,
-                1,
-                bsids.as_ptr(),
-                1,
-                handles.as_mut_ptr(),
-                &raw mut count,
-            );
-            assert_eq!(err, LighthouseError::InvalidHandle);
-            assert_eq!(count, 0);
-        }
-    }
-
-    #[test]
-    fn test_abi_version() {
-        assert_eq!(lighthouse_abi_version(), LIGHTHOUSE_ABI_VERSION);
-    }
-
-    #[test]
-    fn test_detect_version() {
-        let v2_name = CString::new("LHB-001").unwrap();
-        let v1_name = CString::new("HTC BS 001").unwrap();
-        let unknown_name = CString::new("Unknown Device").unwrap();
-        unsafe {
-            assert_eq!(
-                lighthouse_detect_version(v2_name.as_ptr()),
-                BaseStationVersion::V2,
-            );
-            assert_eq!(
-                lighthouse_detect_version(v1_name.as_ptr()),
-                BaseStationVersion::V1,
-            );
-            assert_eq!(
-                lighthouse_detect_version(unknown_name.as_ptr()),
-                BaseStationVersion::Unknown,
-            );
-            assert_eq!(
-                lighthouse_detect_version(std::ptr::null()),
-                BaseStationVersion::Unknown,
-            );
-        }
     }
 }

@@ -47,6 +47,10 @@ typedef enum {
    */
   NullPointer = -8,
   /**
+   * Invalid channel value (must be 1-16)
+   */
+  InvalidChannel = -10,
+  /**
    * General/other error
    */
   Unknown = -99,
@@ -155,6 +159,30 @@ LighthouseError lighthouse_set_state(Handle adapter_handle,
                                      const char *bsid,
                                      uint32_t retries,
                                      uint32_t retry_delay_sec);
+
+/**
+ * Sets the channel frequency of a V2 base station peripheral.
+ *
+ * # Arguments
+ * * `adapter_handle` - Handle to the adapter
+ * * `peripheral_handle` - Handle to the peripheral
+ * * `channel` - Channel number (1-16)
+ * * `bsid` - Optional Bluetooth device identifier filter for V2 devices. Can be NULL.
+ * * `retries` - Number of write attempts (minimum 1)
+ * * `retry_delay_sec` - Delay between retry attempts in seconds
+ *
+ * # Returns
+ * Error code.
+ *
+ * # Safety
+ * `bsid` if not null must be a valid null-terminated UTF-8 string.
+ */
+LighthouseError lighthouse_set_channel(Handle adapter_handle,
+                                       Handle peripheral_handle,
+                                       uint32_t channel,
+                                       const char *bsid,
+                                       uint32_t retries,
+                                       uint32_t retry_delay_sec);
 
 /**
  * Gets human-readable adapter info.

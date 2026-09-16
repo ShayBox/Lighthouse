@@ -3,7 +3,7 @@ pub mod ffi;
 use std::{fmt, str::FromStr, sync::LazyLock, time::Duration};
 
 use btleplug::{
-    api::{Central, Manager as _, Peripheral, ScanFilter, WriteType},
+    api::{CharPropFlags, Central, Manager as _, Peripheral, ScanFilter, WriteType},
     platform::{Adapter, PeripheralId},
 };
 use thiserror::Error;
@@ -15,9 +15,16 @@ pub static V1_UUID: LazyLock<Uuid> = LazyLock::new(|| {
     Uuid::parse_str("0000cb01-0000-1000-8000-00805f9b34fb").expect("V1 UUID is a valid literal")
 });
 
-/// Parsed UUID for V2 base station characteristic
-pub static V2_UUID: LazyLock<Uuid> = LazyLock::new(|| {
-    Uuid::parse_str("00001525-1212-efde-1523-785feabcd124").expect("V2 UUID is a valid literal")
+/// Parsed UUID for V2 base station power state characteristic
+pub static V2_POWER_STATE_UUID: LazyLock<Uuid> = LazyLock::new(|| {
+    Uuid::parse_str("00001525-1212-efde-1523-785feabcd124")
+        .expect("V2 power state UUID is a valid literal")
+});
+
+/// Parsed UUID for V2 base station mode (channel) characteristic
+pub static V2_MODE_UUID: LazyLock<Uuid> = LazyLock::new(|| {
+    Uuid::parse_str("00001524-1212-efde-1523-785feabcd124")
+        .expect("V2 mode UUID is a valid literal")
 });
 
 /// Base station version detection
@@ -42,16 +49,6 @@ impl BaseStationVersion {
             Self::V1
         } else {
             Self::Unknown
-        }
-    }
-
-    /// Returns the characteristic UUID for this base station version
-    #[must_use]
-    pub fn uuid(&self) -> &'static Uuid {
-        match self {
-            Self::V1 => &V1_UUID,
-            Self::V2 => &V2_UUID,
-            Self::Unknown => unreachable!("Unknown version has no UUID"),
         }
     }
 
@@ -80,25 +77,54 @@ impl BaseStationVersion {
         }
     }
 
-    /// Generates the command bytes for this base station version.
+    /// Generates the command bytes and target characteristic UUID for this base station version.
     ///
     /// # Arguments
-    /// * `state` - The desired power state
+    /// * `action` - The action to perform
     /// * `bsid` - An 8-character hex BSID (required for V1, ignored for V2)
     ///
     /// # Errors
     /// Returns `Error::InvalidState` if STANDBY is used with V1.
     /// Returns `Error::Std` if the V1 BSID contains invalid hex characters.
-    pub fn command(&self, state: &State, bsid: Option<&str>) -> Result<Vec<u8>, Error> {
+    /// Returns `Error::InvalidChannel` if an out-of-range channel is used with V2.
+    pub fn command(&self, action: &Action, bsid: Option<&str>) -> Result<(Vec<u8>, Uuid), Error> {
         match self {
             Self::V1 => {
+                let Action::State(state) = action else {
+                    return Err(Error::Message(
+                        "V1 base stations do not support channel management".into(),
+                    ));
+                };
                 let Some(bsid) = bsid else {
                     return Err(Error::Message("V1 requires a BSID".into()));
                 };
-                v1_command(state, bsid)
+                v1_command(state, bsid).map(|cmd| (cmd, *V1_UUID))
             }
-            Self::V2 => v2_command(state),
+            Self::V2 => match action {
+                Action::State(state) => v2_command(state).map(|cmd| (cmd, *V2_POWER_STATE_UUID)),
+                Action::Channel(channel) => {
+                    v2_channel_command(*channel).map(|cmd| (cmd, *V2_MODE_UUID))
+                }
+            },
             Self::Unknown => Err(Error::Message("Unknown base station version".into())),
+        }
+    }
+}
+
+/// A write action to perform on a base station.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Action {
+    /// Set the power state (V1 and V2)
+    State(State),
+    /// Set the channel frequency 1-16 (V2 only)
+    Channel(u8),
+}
+
+impl fmt::Display for Action {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::State(state) => write!(f, "{state}"),
+            Self::Channel(channel) => write!(f, "CHANNEL {channel}"),
         }
     }
 }
@@ -206,6 +232,21 @@ pub fn v2_command(state: &State) -> Result<Vec<u8>, Error> {
     }
 }
 
+/// Generates a V2 base station channel (mode) command.
+///
+/// # Arguments
+/// * `channel` - The desired channel frequency (1-16)
+///
+/// # Errors
+/// Returns `Error::InvalidChannel` if the channel is not in range 1-16.
+pub fn v2_channel_command(channel: u8) -> Result<Vec<u8>, Error> {
+    if !matches!(channel, 1..=16) {
+        return Err(Error::InvalidChannel(format!("V2 channels are 1-16, got {channel}")));
+    }
+
+    Ok(vec![channel])
+}
+
 /// Checks if a peripheral matches any of the provided V1 BSIDs.
 /// Returns the matching BSID if found.
 ///
@@ -256,7 +297,7 @@ pub fn matches_v2_bsid(peripheral_id: &str, normalized_inputs: Option<&[String]>
 /// # Arguments
 /// * `adapter` - The Bluetooth adapter
 /// * `peripheral` - The discovered peripheral to process
-/// * `state` - The desired power state
+/// * `action` - The action to perform
 /// * `bsids` - The raw (unnormalized) BSID inputs from the user
 /// * `retries` - Number of write attempts (minimum 1)
 /// * `retry_delay` - Delay between failed attempts
@@ -266,7 +307,7 @@ pub fn matches_v2_bsid(peripheral_id: &str, normalized_inputs: Option<&[String]>
 pub async fn process_peripheral(
     adapter: &Adapter,
     peripheral: &DiscoveredPeripheral,
-    state: &State,
+    action: &Action,
     bsids: &[String],
     retries: u32,
     retry_delay: Duration,
@@ -298,13 +339,12 @@ pub async fn process_peripheral(
     } else {
         Some(bsid.as_str())
     };
-    let cmd = version.command(state, bsid_for_cmd)?;
-    let uuid = *version.uuid();
+    let (cmd, uuid) = version.command(action, bsid_for_cmd)?;
 
     write_with_retries(adapter, peripheral, &cmd, uuid, retries.max(1), retry_delay).await?;
 
     Ok(Some(format!(
-        "{} [{}]: {state}",
+        "{} [{}]: {action}",
         peripheral.name, peripheral_id_str
     )))
 }
@@ -397,6 +437,9 @@ pub enum Error {
 
     #[error("Invalid state: {0}")]
     InvalidState(String),
+
+    #[error("Invalid channel: {0}")]
+    InvalidChannel(String),
 
     #[error("{0}")]
     Message(String),
@@ -527,3 +570,139 @@ pub async fn write(
 
     Ok(())
 }
+
+/// # Read from a device
+///
+/// # Errors
+/// Will return `Err` if connection, service discovery, or read fails.
+pub async fn read(adapter: &Adapter, id: &PeripheralId, uuid: Uuid) -> Result<Vec<u8>, Error> {
+    let peripheral = adapter.peripheral(id).await.map_err(Error::Btle)?;
+
+    if peripheral.connect().await.map_err(Error::Btle).is_err() {
+        return Err(Error::Message(String::from("Failed to connect")));
+    }
+
+    if peripheral
+        .discover_services()
+        .await
+        .map_err(Error::Btle)
+        .is_err()
+    {
+        peripheral.disconnect().await.map_err(Error::Btle)?;
+        return Err(Error::Message(String::from("Failed to scan")));
+    }
+
+    let Some(characteristic) = peripheral
+        .characteristics()
+        .into_iter()
+        .find(|c| c.uuid == uuid)
+    else {
+        peripheral.disconnect().await.map_err(Error::Btle)?;
+        return Err(Error::Message(format!("Characteristic not found: {uuid}")));
+    };
+
+    if !characteristic.properties.contains(CharPropFlags::READ) {
+        peripheral.disconnect().await.map_err(Error::Btle)?;
+        return Err(Error::Message(String::from("Read not supported by characteristic")));
+    }
+
+    let Ok(value) = peripheral.read(&characteristic).await else {
+        peripheral.disconnect().await.map_err(Error::Btle)?;
+        return Err(Error::Message(String::from("Failed to read")));
+    };
+
+    peripheral.disconnect().await.map_err(Error::Btle)?;
+
+    Ok(value)
+}
+
+/// Status information read from a V2 base station.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct V2Status {
+    /// Raw power state value, if readable (older firmware may not support reads)
+    pub power_state: Option<u8>,
+    /// Current channel/mode value, if readable
+    pub channel: Option<u8>,
+}
+
+/// Reads the power state and current channel from a V2 base station in a single connection.
+///
+/// Fields are `None` when the corresponding characteristic is missing or does not support reads.
+///
+/// # Errors
+/// Will return `Err` if connection or service discovery fails.
+pub async fn v2_status(adapter: &Adapter, id: &PeripheralId) -> Result<V2Status, Error> {
+    let peripheral = adapter.peripheral(id).await.map_err(Error::Btle)?;
+
+    if peripheral.connect().await.map_err(Error::Btle).is_err() {
+        return Err(Error::Message(String::from("Failed to connect")));
+    }
+
+    if peripheral
+        .discover_services()
+        .await
+        .map_err(Error::Btle)
+        .is_err()
+    {
+        peripheral.disconnect().await.map_err(Error::Btle)?;
+        return Err(Error::Message(String::from("Failed to scan")));
+    }
+
+    let characteristics = peripheral.characteristics();
+    let mut status = V2Status {
+        power_state: None,
+        channel: None,
+    };
+
+    if let Some(characteristic) = characteristics
+        .iter()
+        .find(|c| c.uuid == *V2_POWER_STATE_UUID)
+        && characteristic.properties.contains(CharPropFlags::READ)
+    {
+        match peripheral.read(characteristic).await {
+            Ok(value) => status.power_state = value.first().copied(),
+            Err(error) => {
+                #[cfg(feature = "log")]
+                tracing::debug!(%error, "Failed to read power state");
+            }
+        }
+    }
+
+    if let Some(characteristic) = characteristics.iter().find(|c| c.uuid == *V2_MODE_UUID)
+        && characteristic.properties.contains(CharPropFlags::READ)
+    {
+        match peripheral.read(characteristic).await {
+            Ok(value) => status.channel = value.first().copied(),
+            Err(error) => {
+                #[cfg(feature = "log")]
+                tracing::debug!(%error, "Failed to read channel");
+            }
+        }
+    }
+
+    peripheral.disconnect().await.map_err(Error::Btle)?;
+
+    Ok(status)
+}
+
+/// Formats a raw V2 power state value for display.
+#[must_use]
+pub fn v2_power_state_name(value: u8) -> String {
+    match value {
+        0x00 => String::from("OFF"),
+        0x02 => String::from("STANDBY"),
+        0x01 | 0x09 | 0x0B => String::from("ON"),
+        other => format!("UNKNOWN(0x{other:02X})"),
+    }
+}
+
+/// Formats a raw V2 channel/mode value for display.
+#[must_use]
+pub fn v2_channel_name(value: u8) -> String {
+    if matches!(value, 1..=16) {
+        value.to_string()
+    } else {
+        format!("UNKNOWN(0x{value:02X})")
+    }
+}
+

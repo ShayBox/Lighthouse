@@ -14,18 +14,18 @@ Virtual reality basestation power management in Rust
 ## Usage
 
 ```
-Usage: lighthouse [OPTIONS] --state <STATE>
+Usage: lighthouse [OPTIONS]
 
 Options:
-  -s, --state <STATE>      V1: [OFF|ON] | V2: [OFF|ON|STANDBY]
-  -b, --bsid <BSID>...     V1: Basestation BSID (Required) | V2: Bluetooth Device Identifier (Optional)
-  -v, --verbose...         Increase logging verbosity
-  -q, --quiet...           Decrease logging verbosity
-  -t, --timeout <TIMEOUT>  Request timeout in seconds [default: 10]
-      --retries <RETRIES>  Number of write attempts per basestation [default: 3]
-      --retry-delay <RETRY_DELAY>
-                            Delay between write attempts in seconds [default: 2]
-  -h, --help               Print help
+  -s, --state <STATE>              V1: [OFF|ON] | V2: [OFF|ON|STANDBY] (omit both action flags to show status)
+  -c, --channel <CHANNEL>          V2 only: set channel frequency (1-16)
+  -b, --bsid <BSID>...             V1: Basestation BSID (Required) | V2: Bluetooth Device Identifier (Optional)
+  -v, --verbose...                 Increase logging verbosity
+  -q, --quiet...                   Decrease logging verbosity
+  -t, --timeout <TIMEOUT>          Request timeout in seconds [default: 10]
+      --retries <RETRIES>          Number of write attempts per basestation [default: 3]
+      --retry-delay <RETRY_DELAY>  Delay between write attempts in seconds [default: 2]
+  -h, --help                       Print help
 ```
 
 V1 Basestations require an 8 character BSID found on the device to work.
@@ -33,6 +33,27 @@ V1 Basestations require an 8 character BSID found on the device to work.
 V2 Basestations do not require BSID. But you can specify their MAC address as BSID to manage a specific device.
 
 ### Examples
+
+**Showing status of lighthouses within range:**
+
+Run without action flags to scan for basestations and show their power state and channel:
+
+```bash
+$ lighthouse
+2025-08-24T21:14:58.528048Z  INFO lighthouse: Starting scan on hci0...
+2025-08-24T21:15:33.543205Z  INFO lighthouse: LHB-6DC32F38 [hci0/dev_E2_5A_B0_E4_97_AD]: ON, Channel 5
+```
+
+Power state and channel are read from the device, so this only works on V2 basestations with firmware that supports reading. Older firmware shows `N/A` for values it cannot report.
+
+**Setting a V2 lighthouse channel:**
+
+V2 basestations support channels 1-16. Use different channels to reduce interference between multiple basestations:
+
+```bash
+$ lighthouse --channel 5
+$ lighthouse -c 3 --bsid "E2:5A:B0:E4:97:AD"
+```
 
 **Turning a V1 lighthouse on:**
 
