@@ -286,7 +286,7 @@ pub fn matches_v2_bsid(peripheral_id: &str, normalized_inputs: Option<&[String]>
     let normalized_peripheral_id = normalize_peripheral_id(peripheral_id);
     normalized_inputs
         .iter()
-        .any(|input| normalized_peripheral_id.contains(input.as_str()))
+        .any(|input| normalized_peripheral_id.contains(&normalize_bsid(input)))
 }
 
 /// Processes a single peripheral: detects version, matches BSID, builds command, and writes.
