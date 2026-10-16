@@ -1,5 +1,5 @@
 use lighthouse::{
-    Action, BaseStationVersion, Error, State, V2_MODE_UUID, V2_POWER_STATE_UUID,
+    Action, BaseStationVersion, Error, State, V2_MODE_UUID, V2_POWER_STATE_UUID, matches_v2_bsid,
     v2_channel_command, v2_channel_name, v2_power_state_name,
 };
 
@@ -64,4 +64,13 @@ fn test_channel_names() {
 fn test_action_display() {
     assert_eq!(Action::State(State::On).to_string(), "ON");
     assert_eq!(Action::Channel(5).to_string(), "CHANNEL 5");
+}
+
+#[test]
+fn test_matches_v2_bsid() {
+    let device_a_id = "hci0/dev_AA_AA_AA_AA_AA_AA";
+
+    assert!(matches_v2_bsid(device_a_id, Some(&["AA:AA:AA:AA:AA:AA"])));
+    assert!(matches_v2_bsid(device_a_id, Some(&["AA_AA_AA_AA_AA_AA"])));
+    assert!(matches_v2_bsid(device_a_id, Some(&[device_a_id])));
 }
