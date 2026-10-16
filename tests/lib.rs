@@ -70,7 +70,7 @@ fn test_action_display() {
 fn test_matches_v2_bsid() {
     let device_a_id = "hci0/dev_AA_AA_AA_AA_AA_AA";
 
-    assert!(matches_v2_bsid(device_a_id, Some(&["AA:AA:AA:AA:AA:AA".to_string()])));
-    assert!(matches_v2_bsid(device_a_id, Some(&["AA_AA_AA_AA_AA_AA".to_string()])));
-    assert!(matches_v2_bsid(device_a_id, Some(&[device_a_id.to_string()])));
+    assert!(matches_v2_bsid(device_a_id, Some(&["AA:AA:AA:AA:AA:AA"])));
+    assert!(matches_v2_bsid(device_a_id, Some(&["AA_AA_AA_AA_AA_AA"])));
+    assert!(matches_v2_bsid(device_a_id, Some(&[device_a_id])));
 }

@@ -278,7 +278,10 @@ pub fn matches_v1_bsid<'a>(name: &str, bsids: &'a [String]) -> Option<&'a str> {
 ///
 /// If `normalized_inputs` is `None`, all V2 devices match.
 #[must_use]
-pub fn matches_v2_bsid(peripheral_id: &str, normalized_inputs: Option<&[String]>) -> bool {
+pub fn matches_v2_bsid<S: AsRef<str>>(
+    peripheral_id: &str,
+    normalized_inputs: Option<&[S]>,
+) -> bool {
     let Some(normalized_inputs) = normalized_inputs else {
         return true;
     };
@@ -286,7 +289,7 @@ pub fn matches_v2_bsid(peripheral_id: &str, normalized_inputs: Option<&[String]>
     let normalized_peripheral_id = normalize_peripheral_id(peripheral_id);
     normalized_inputs
         .iter()
-        .any(|input| normalized_peripheral_id.contains(&normalize_bsid(input)))
+        .any(|input| normalized_peripheral_id.contains(&normalize_bsid(input.as_ref())))
 }
 
 /// Processes a single peripheral: detects version, matches BSID, builds command, and writes.
